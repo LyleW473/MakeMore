@@ -58,14 +58,19 @@ for i in range(100):
     # Softmax activation function:
     counts = logits.exp() # Equivalent to the counts for each pattern in bigram.py (To convert log-counts into something that looks like counts)
     probabilities = counts / counts.sum(1, keepdims = True) # Normalise rows to get the probability distribution for each row
-
-
+    
     # Finding loss:
+
     # probabilities[torch.arange(5), ys] = probabilities that the NN outputs to the correct next character e.g. for "em", it outputs the probabilities that "m" will come after "e" [But for all input examples]
     # .log() to find the log likelihood
     # "-" to find the negative log likelihood
     # .mean() to find the average negative log likelihood
-    loss = -(probabilities[torch.arange(num_examples), ys].log().mean())
+
+    # + (W **2).mean() = Regulurisation loss for model smoothing to achieve a more uniform probability distribution by incentivising weights to be 0
+    #   - Achieves 0 loss if W is exactly 0, but for non-zero numbers, more loss is accumulated
+    #   - Adjusting the multiplier will determine the regularisation strength (Increasing = smoother)
+    loss = -(probabilities[torch.arange(num_examples), ys].log().mean()) + (0.01 * (W ** 2).mean())
+     
 
 
     # Backward pass:
