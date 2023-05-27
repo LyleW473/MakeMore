@@ -22,6 +22,9 @@ xs, ys = [], []
 s_to_i = {l:index + 1 for index, l in enumerate(list(string_ascii_lowercase))}
 s_to_i["."] = 0
 
+# From index to letter
+i_to_s = {index:l for l, index in s_to_i.items()}
+
 for w in words:
     chars = ["."] + list(w) + ["."] # "emma" = [".","e", "m", "m", "a", "."], "." = start or end of the string
     for i in range(0, len(chars) - 1):
@@ -69,7 +72,7 @@ for i in range(100):
     # + (W **2).mean() = Regulurisation loss for model smoothing to achieve a more uniform probability distribution by incentivising weights to be 0
     #   - Achieves 0 loss if W is exactly 0, but for non-zero numbers, more loss is accumulated
     #   - Adjusting the multiplier will determine the regularisation strength (Increasing = smoother)
-    loss = -(probabilities[torch.arange(num_examples), ys].log().mean()) + (0.01 * (W ** 2).mean())
+    loss = -(probabilities[torch.arange(num_examples), ys].log().mean()) + (0.01 * ((W ** 2).mean()))
      
 
 
@@ -83,6 +86,29 @@ for i in range(100):
     loss.backward()
 
     # Update weights to minimise loss
-    W.data += - (60 * W.grad)
+    W.data += - (50 * W.grad)
 
     print(f"Loss: {loss.item()}")
+
+
+# 4. Sampling:
+generator = torch.Generator().manual_seed(2147483647)
+for _ in range(10):
+    word = ""
+    idx = 0
+    while True:
+
+        xenc = F.one_hot(torch.tensor([idx]), num_classes = 27).float() # Row of W corresponding to idx
+        logits = xenc @ W
+
+        # Softmax
+        counts = logits.exp()
+        p = counts / counts.sum(1, keepdims = True)
+
+        idx = torch.multinomial(p, num_samples = 1, replacement = True, generator = generator).item()
+        word += i_to_s[idx]
+
+        if idx == 0: # The "." token
+            break
+    
+    print(word)

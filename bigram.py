@@ -41,11 +41,11 @@ plt.show()
 generator = torch.Generator().manual_seed(2147483647)
 
 # Build probabilities array
-probabilities = (count + 1).float() # Copy of count array but converted to floats, +1 for model smoothing so that patterns that occured 0 times in the training set will not result in infinite loss, higher values makes the model more smooth 
-# Normalise each row by summing the entire row, keepdim = True so that we can normalise the rows, not the columns
-probabilities /= probabilities.sum(dim = 1, keepdim = True) # Dim = The dimension we want to sum over, keepdim = True will return a [dim, input_size] tensor
+probabilities = (count + 1).float() # Copy of count array but converted to floats, +1 for model smoothing so that patterns that occurred 0 times in the training set will not result in infinite loss, higher values makes the model more smooth 
+# Normalise each row by summing the entire row, keepdims = True so that we can normalise the rows, not the columns
+probabilities /= probabilities.sum(dim = 1, keepdims = True) # Dim = The dimension we want to sum over, keepdims = True will return a [dim, input_size] tensor
 
-for i in range(10):
+for _ in range(10):
     word = ""
     idx = 0
     while True:
@@ -72,7 +72,7 @@ for i in range(10):
 # - Equivalent to minimising the average negative log likelihood
 # The lower the negative log likelihood, the better the model is. The lowest it can be is 0
 
-log_likelihood = 0
+log_likelihood = 0.0
 n = 0
 for w in words:
     chars = ["."] + list(w) + ["."] # "emma" = [".","e", "m", "m", "a", "."], "." = start or end of the string
