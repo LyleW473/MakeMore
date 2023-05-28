@@ -17,35 +17,55 @@ s_to_i["."] = 0
 i_to_s = {index:l for l, index in s_to_i.items()}
 
 
-# Building training dataset:
-block_size = 3 # Number of characters used to predict the next character
-X, Y = [], [] # X = inputs, Y = targets / labels
+# Building dataset + splitting the dataset into splits:
 
+def build_dataset(words):
+    block_size = 3 # Number of characters used to predict the next character
+    X, Y = [], [] # X = inputs, Y = targets / labels
+    
+    for w in words:
 
-for w in words:
+        """
+        Outputs:
+        ... ---> e
+        ..e ---> m
+        .em ---> m
+        emm ---> a
+        mma ---> .
+        """
+        context = [0] * block_size
+        for char in w + ".":
+            idx = s_to_i[char]
+            X.append(context)
+            Y.append(idx)
 
-    """
-    Outputs:
-    ... ---> e
-    ..e ---> m
-    .em ---> m
-    emm ---> a
-    mma ---> .
-    """
-    context = [0] * block_size
-    for char in w + ".":
-        idx = s_to_i[char]
-        X.append(context)
-        Y.append(idx)
+            #print("".join(i_to_s[i] for i in context), "--->", i_to_s[idx])
 
-        #print("".join(i_to_s[i] for i in context), "--->", i_to_s[idx])
+            context = context[1:] + [idx]
 
-        context = context[1:] + [idx]
+    X = torch.tensor(X) # X is a tensor of arrays containing the indexes of each character e.g. ['.', '.', 'e'] == [0, 0, 5]
+    Y = torch.tensor(Y) # Y is a tensor of integers containing the index of the actual next character at i. (e.g. "m" comes after "..e", so the value at i will be 13)
 
-X = torch.tensor(X) # X is a tensor of arrays containing the indexes of each character e.g. ['.', '.', 'e'] == [0, 0, 5]
-Y = torch.tensor(Y) # Y is a tensor of integers containing the index of the actual next character at i. (e.g. "m" comes after "..e", so the value at i will be 13)
-print(X)
-print(Y)
+    return X, Y
+
+# Training, dev/validation split, test split: 80%, 10%, 10%
+# Training = Used for optimising the parameters of the model with gradient descent
+# Dev/validation = Used for development of the hyperparameters of the model
+# Test = Testing the performance of the model (Smaller percentage so that the model does not become overfitted on the testing data)
+
+import random
+random.seed(42)
+random.shuffle(words) 
+n1 = int(0.8 * len(words))
+n2 = int(0.9 * len(words))
+
+Xtr, Ytr = build_dataset(words[0:n1]) # 80% training split
+Xdev, Ydev = build_dataset(words[n1:n2]) # 10% dev / validation split
+Xte, Yte = build_dataset(words[n2:]) # 10% test split
+
+print(Xtr.shape, Ytr.shape)
+print(Xdev.shape, Ydev.shape)
+print(Xte.shape, Yte.shape)
 
 g = torch.Generator().manual_seed(2147483647)
 
@@ -67,7 +87,7 @@ for p in parameters:
     p.requires_grad = True
 
 
-steps = 10000
+steps = 30000
 
 # Learning rate tweaking:
 learning_rate_exponents = torch.linspace(-3, 0, steps) 
@@ -79,12 +99,12 @@ losses_i = [] # Losses for each learning rate
 for i in range(steps):
 
     # Generate mini batch (Stochastic gradient descent for faster convergence to find a local minimum to minimise the loss)
-    mini_b_idxs = torch.randint(0, X.shape[0], (32,)) # Generate indexes between 0 and X.shape[0], 32 indexes inside the list (Chooses 32 examples out of the 228146 examples in the dataset)
+    mini_b_idxs = torch.randint(0, Xtr.shape[0], (32,)) # Generate indexes between 0 and X.shape[0], 32 indexes inside the list (Chooses 32 examples out of the 228146 examples in the dataset)
 
     # Forward pass:
     # C[X] = entire data set, C[X[mini_b_idxs]] = training on mini batch
 
-    embedding = C[X[mini_b_idxs]] # Shape = torch.Size([32, 3, 2]) Note: First number = number of examples in X (Changes with input size, i.e. words + length of words)
+    embedding = C[Xtr[mini_b_idxs]] # Shape = torch.Size([32, 3, 2]) Note: First number = number of examples in X (Changes with input size, i.e. words + length of words)
 
     # Convert [32, 3, 2] -- > [32, 6] for matrix multiplication with weights and biases [Use torch.cat]
     # All of these 3 have a shape of [32, 2]
@@ -118,7 +138,7 @@ for i in range(steps):
     # - Complex expressions are simplified for the backward pass
     # - Ensures that very positive numbers do not result in a probability of "nan" due to e^num being out of range
     # Y[mini_b_idxs] = Training on mini batch, Y = Training on entire dataset (All 228146 examples at once)
-    loss = F.cross_entropy(logits, Y[mini_b_idxs])
+    loss = F.cross_entropy(logits, Ytr[mini_b_idxs])
 
 
     # Backpropagation:
@@ -126,7 +146,7 @@ for i in range(steps):
     # Zero-grad
     for p in parameters:
         p.grad = None
-        
+    
 
     loss.backward()
 
@@ -141,7 +161,7 @@ for i in range(steps):
     # learning_rate_i.append(learning_rate_exponents[i])
     # losses_i.append(loss.item())
 
-    print(loss.item())
+print(loss.item())
 
 # Finding a good initial learning rate:
 # # Plot learning rate exponents on x axis, losses on y axis 
