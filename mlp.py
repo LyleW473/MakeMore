@@ -189,3 +189,38 @@ H = torch.tanh(embedding.view(embedding.shape[0], 30) @ W1 + B1)
 logits = H @ W2 + B2
 loss = F.cross_entropy(logits, Yte)
 print(f"TestLoss:{loss}")
+
+def create_samples(num_samples, block_size, embedding_lookup_table):
+    g = torch.Generator().manual_seed(2147483647 + 10)
+
+    samples = []
+
+    for _ in range(num_samples):
+        word = ""
+        context = [0] * block_size # Initialise with special case character "."
+
+        while True:
+            embedding = embedding_lookup_table[torch.tensor([context])] # [1, block_size, d]
+            hidden = torch.tanh(embedding.view(1, -1) @ W1 + B1) # -1 will find the number of inputs automatically
+
+            logits = hidden @ W2 + B2 # Find predictions
+            probabilities = F.softmax(logits, dim = 1) # Exponentiates for counts and then normalises them (to sum to 1)
+
+            # Generate the next character using the probabiltiy distribution outputted by the NN
+            idx = torch.multinomial(probabilities, num_samples = 1, generator = g).item()
+            
+            # Update the context
+            context = context[1:] + [idx]
+            
+            # Add character corresponding to the index
+            word += i_to_s[idx]
+
+            # Found the special character "."
+            if idx == 0:
+                break
+        
+        samples.append(word)
+
+    return samples
+
+print(f"Samples: {create_samples(num_samples = 30, block_size = 3, embedding_lookup_table = C)}")
