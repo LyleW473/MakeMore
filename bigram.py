@@ -41,6 +41,7 @@ plt.show()
 generator = torch.Generator().manual_seed(2147483647)
 
 # Build probabilities array
+# Note: Probabilities is a 2D array where each row will contain a probability distribution of all the possible characters that can come after the first character (i.e. the character at index "row")
 probabilities = (count + 1).float() # Copy of count array but converted to floats, +1 for model smoothing so that patterns that occurred 0 times in the training set will not result in infinite loss, higher values makes the model more smooth 
 # Normalise each row by summing the entire row, keepdims = True so that we can normalise the rows, not the columns
 probabilities /= probabilities.sum(dim = 1, keepdims = True) # Dim = The dimension we want to sum over, keepdims = True will return a [dim, input_size] tensor
