@@ -71,14 +71,14 @@ g = torch.Generator().manual_seed(2147483647)
 
 # 27 possible characters (a - z + .)
 # C = embedding look-up table 
-C = torch.randn((27, 2), generator = g) # Each of the 27 characters will have a 2-D embedding
+C = torch.randn((27, 10), generator = g) # Each of the 27 characters will have a 2-D embedding
 
 # Hidden layer (= H) :
-W1 = torch.randn((6, 100), generator = g) # 6 inputs because (3 x 2 dimensional embeddings), Neurons = 100 (subject to change)
-B1 = torch.randn(100, generator = g) # 100 biases
+W1 = torch.randn((30, 200), generator = g) # 6 inputs because (3 x 2 dimensional embeddings), Neurons = 300 (subject to change)
+B1 = torch.randn(200, generator = g) # 300 biases
 
 # Output layer:
-W2 = torch.randn((100, 27), generator = g) # 27 possible outputs
+W2 = torch.randn((200, 27), generator = g) # 27 possible outputs
 B2 = torch.randn(27, generator = g)
 
 # All parameters
@@ -86,8 +86,9 @@ parameters = [C, W1, B1, W2, B2]
 for p in parameters:
     p.requires_grad = True
 
+print(f"Total number of parameters: {sum(p.nelement() for p in parameters)}")
 
-steps = 30000
+steps = 200000
 
 # Learning rate tweaking:
 learning_rate_exponents = torch.linspace(-3, 0, steps) 
@@ -96,10 +97,12 @@ learning_rates = 10 ** learning_rate_exponents # 0.001 learning rate --- > 10^^-
 learning_rate_i = [] # Used learning rates
 losses_i = [] # Losses for each learning rate
 
+mini_batch_size = 32
+
 for i in range(steps):
 
     # Generate mini batch (Stochastic gradient descent for faster convergence to find a local minimum to minimise the loss)
-    mini_b_idxs = torch.randint(0, Xtr.shape[0], (32,)) # Generate indexes between 0 and X.shape[0], 32 indexes inside the list (Chooses 32 examples out of the 228146 examples in the dataset)
+    mini_b_idxs = torch.randint(0, Xtr.shape[0], (mini_batch_size,)) # Generate indexes between 0 and X.shape[0], 32 indexes inside the list (Chooses 32 examples out of the 228146 examples in the dataset)
 
     # Forward pass:
     # C[X] = entire data set, C[X[mini_b_idxs]] = training on mini batch
@@ -118,7 +121,7 @@ for i in range(steps):
     # Method 3: (Most efficient)
     # embedding.view(32, 6) @ W1 + B1
 
-    H = torch.tanh(embedding.view(embedding.shape[0], 6) @ W1 + B1) # Tanh to get numbers between -1 and 1 # H.shape = [num_examples, num_neurons] (num_neurons for each example)
+    H = torch.tanh(embedding.view(embedding.shape[0], 30) @ W1 + B1) # Tanh to get numbers between -1 and 1 # H.shape = [num_examples, num_neurons] (num_neurons for each example)
 
     logits = H @ W2 + B2 # Find output in the form of logits
 
@@ -151,20 +154,38 @@ for i in range(steps):
     loss.backward()
 
     # Update weights
-    learning_rate = learning_rates[i]
+    learning_rate = 0.1 if i < (steps / 2) else 0.01
 
     for p in parameters:
         # p.data += -(learning_rate * p.grad)
-        p.data += -(0.1 * p.grad)
+        p.data += -(learning_rate * p.grad)
     
     # # Track stats:
     # learning_rate_i.append(learning_rate_exponents[i])
-    # losses_i.append(loss.item())
+    losses_i.append(loss.log10().item())
 
-print(loss.item())
+print(f"TrainingLoss {loss.item()}")
 
 # Finding a good initial learning rate:
 # # Plot learning rate exponents on x axis, losses on y axis 
 # # (Using the plot, look for a learning rate exponent such that the loss is minimised) [In this case, it is around 0.1]
 # plt.plot(learning_rate_i, losses_i)
 # plt.show()
+
+# Plotting the loss over steps
+plt.plot([i for i in range(steps)], losses_i)
+plt.show()
+
+# Dev:
+embedding = C[Xdev]
+H = torch.tanh(embedding.view(embedding.shape[0], 30) @ W1 + B1)
+logits = H @ W2 + B2
+loss = F.cross_entropy(logits, Ydev)
+print(f"DevLoss:{loss}")
+
+# Test:
+embedding = C[Xte]
+H = torch.tanh(embedding.view(embedding.shape[0], 30) @ W1 + B1)
+logits = H @ W2 + B2
+loss = F.cross_entropy(logits, Yte)
+print(f"TestLoss:{loss}")
