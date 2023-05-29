@@ -19,8 +19,10 @@ i_to_s = {index:l for l, index in s_to_i.items()}
 
 # Building dataset + splitting the dataset into splits:
 
-def build_dataset(words):
-    block_size = 3 # Number of characters used to predict the next character
+def build_dataset(words, block_size):
+
+    # block_size = Number of characters used to predict the next character
+
     X, Y = [], [] # X = inputs, Y = targets / labels
     
     for w in words:
@@ -59,26 +61,30 @@ random.shuffle(words)
 n1 = int(0.8 * len(words))
 n2 = int(0.9 * len(words))
 
-Xtr, Ytr = build_dataset(words[0:n1]) # 80% training split
-Xdev, Ydev = build_dataset(words[n1:n2]) # 10% dev / validation split
-Xte, Yte = build_dataset(words[n2:]) # 10% test split
+block_size = 6 # round(sum(len(word) for word in words) / len(words))
 
-print(Xtr.shape, Ytr.shape)
-print(Xdev.shape, Ydev.shape)
-print(Xte.shape, Yte.shape)
+Xtr, Ytr = build_dataset(words[0:n1], block_size = block_size) # 80% training split
+Xdev, Ydev = build_dataset(words[n1:n2], block_size = block_size) # 10% dev / validation split
+Xte, Yte = build_dataset(words[n2:], block_size = block_size) # 10% test split
+
+print(f"Train: X: {Xtr.shape} Y: {Ytr.shape}")
+print(f"Dev: X: {Xdev.shape} Y: {Ydev.shape}")
+print(f"Test: X: {Xte.shape} Y: {Yte.shape}")
 
 g = torch.Generator().manual_seed(2147483647)
 
 # 27 possible characters (a - z + .)
 # C = embedding look-up table 
-C = torch.randn((27, 10), generator = g) # Each of the 27 characters will have a 2-D embedding
+n_dimensions = 10
+C = torch.randn((27, n_dimensions), generator = g) # Each of the 27 characters will have a n-D embedding
 
 # Hidden layer (= H) :
-W1 = torch.randn((30, 200), generator = g) # 6 inputs because (3 x 2 dimensional embeddings), Neurons = 300 (subject to change)
-B1 = torch.randn(200, generator = g) # 300 biases
+num_neurons = 200
+W1 = torch.randn((block_size * n_dimensions, num_neurons), generator = g) # (block x n_dimensinal), num_neurons for this layer
+B1 = torch.randn(num_neurons, generator = g) # num_neurons biases
 
 # Output layer:
-W2 = torch.randn((200, 27), generator = g) # 27 possible outputs
+W2 = torch.randn((num_neurons, 27), generator = g) # 27 possible outputs
 B2 = torch.randn(27, generator = g)
 
 # All parameters
@@ -88,7 +94,7 @@ for p in parameters:
 
 print(f"Total number of parameters: {sum(p.nelement() for p in parameters)}")
 
-steps = 200000
+steps = 300000
 
 # Learning rate tweaking:
 learning_rate_exponents = torch.linspace(-3, 0, steps) 
@@ -121,7 +127,7 @@ for i in range(steps):
     # Method 3: (Most efficient)
     # embedding.view(32, 6) @ W1 + B1
 
-    H = torch.tanh(embedding.view(embedding.shape[0], 30) @ W1 + B1) # Tanh to get numbers between -1 and 1 # H.shape = [num_examples, num_neurons] (num_neurons for each example)
+    H = torch.tanh(embedding.view(embedding.shape[0], n_dimensions * block_size) @ W1 + B1) # Tanh to get numbers between -1 and 1 # H.shape = [num_examples, num_neurons] (num_neurons for each example)
 
     logits = H @ W2 + B2 # Find output in the form of logits
 
@@ -178,14 +184,14 @@ plt.show()
 
 # Dev:
 embedding = C[Xdev]
-H = torch.tanh(embedding.view(embedding.shape[0], 30) @ W1 + B1)
+H = torch.tanh(embedding.view(embedding.shape[0], n_dimensions * block_size) @ W1 + B1)
 logits = H @ W2 + B2
 loss = F.cross_entropy(logits, Ydev)
 print(f"DevLoss:{loss}")
 
 # Test:
 embedding = C[Xte]
-H = torch.tanh(embedding.view(embedding.shape[0], 30) @ W1 + B1)
+H = torch.tanh(embedding.view(embedding.shape[0], n_dimensions * block_size) @ W1 + B1)
 logits = H @ W2 + B2
 loss = F.cross_entropy(logits, Yte)
 print(f"TestLoss:{loss}")
@@ -223,4 +229,4 @@ def create_samples(num_samples, block_size, embedding_lookup_table):
 
     return samples
 
-print(f"Samples: {create_samples(num_samples = 30, block_size = 3, embedding_lookup_table = C)}")
+print(f"Samples: {create_samples(num_samples = 30, block_size = block_size, embedding_lookup_table = C)}")
