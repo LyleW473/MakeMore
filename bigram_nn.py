@@ -65,9 +65,11 @@ for i in range(100):
     # Finding loss:
 
     # probabilities[torch.arange(5), ys] = probabilities that the NN outputs to the correct next character e.g. for "em", it outputs the probabilities that "m" will come after "e" [But for all input examples]
+    # E.g. probabilities[Example1, IndexOfCorrectNextCharacter] = The probability assigned to the correct next character by the model
     # .log() to find the log likelihood
     # "-" to find the negative log likelihood
     # .mean() to find the average negative log likelihood
+    # A low average negative log likelihood means that the model is assigning high probabilities to the correct next character
 
     # + (W **2).mean() = Regulurisation loss for model smoothing to achieve a more uniform probability distribution by incentivising weights to be 0
     #   - Achieves 0 loss if W is exactly 0, but for non-zero numbers, more loss is accumulated
