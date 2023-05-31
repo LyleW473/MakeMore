@@ -64,7 +64,12 @@ C = torch.randn((27, n_dimensions), generator = g)
 
 # Hidden
 num_neurons = 200 # In the hidden layer
-W1 = torch.randn((block_size * n_dimensions, num_neurons), generator = g) * 0.2 # Scaling down to prevent tanh saturation (Where at initialisation these weights may be in the flat regions of tanh, so learn slower)
+
+# Note: We want the mean and standard deviation for the inputs and pre-activations to be roughly the same to preserve the gaussian / normal distribution
+fan_in = n_dimensions * block_size # Number of input elements
+standard_deviation = ((5/3) / (fan_in ** 0.5)) # standard deviation = gain / sqrt(fan_in) [gain is 5/3 for tanh linearity based on Kai Ming paper]
+
+W1 = torch.randn((fan_in, num_neurons), generator = g) * standard_deviation # Scaling down to prevent tanh saturation (Where at initialisation these weights may be in the flat regions of tanh, so learn slower)
 B1 = torch.randn(num_neurons, generator = g) * 0.01 # Scaling down to prevent tanh saturation (Where at initialisation these biases may be in the flat regions of tanh, so learn slower)
 
 # Output
