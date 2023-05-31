@@ -182,19 +182,19 @@ print(f"TrainingLoss {loss.item()}")
 plt.plot([i for i in range(steps)], losses_i)
 plt.show()
 
+@torch.no_grad() # Disables gradient tracking
+def split_loss(inputs, targets):
+    embedding = C[inputs]
+    H = torch.tanh(embedding.view(embedding.shape[0], n_dimensions * block_size) @ W1 + B1)
+    logits = H @ W2 + B2
+    loss = F.cross_entropy(logits, targets)
+    return loss.item()
+
 # Dev:
-embedding = C[Xdev]
-H = torch.tanh(embedding.view(embedding.shape[0], n_dimensions * block_size) @ W1 + B1)
-logits = H @ W2 + B2
-loss = F.cross_entropy(logits, Ydev)
-print(f"DevLoss:{loss}")
+print(f"DevLoss:{split_loss(inputs = Xdev, targets = Ydev)}")
 
 # Test:
-embedding = C[Xte]
-H = torch.tanh(embedding.view(embedding.shape[0], n_dimensions * block_size) @ W1 + B1)
-logits = H @ W2 + B2
-loss = F.cross_entropy(logits, Yte)
-print(f"TestLoss:{loss}")
+print(f"TestLoss:{split_loss(inputs = Xte, targets = Yte)}")
 
 def create_samples(num_samples, block_size, embedding_lookup_table):
     g = torch.Generator().manual_seed(2147483647 + 10)
