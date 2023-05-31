@@ -64,8 +64,8 @@ C = torch.randn((27, n_dimensions), generator = g)
 
 # Hidden
 num_neurons = 200 # In the hidden layer
-W1 = torch.randn((block_size * n_dimensions, num_neurons), generator = g)
-B1 = torch.randn(num_neurons, generator = g)
+W1 = torch.randn((block_size * n_dimensions, num_neurons), generator = g) * 0.2 # Scaling down to prevent tanh saturation (Where at initialisation these weights may be in the flat regions of tanh, so learn slower)
+B1 = torch.randn(num_neurons, generator = g) * 0.01 # Scaling down to prevent tanh saturation (Where at initialisation these biases may be in the flat regions of tanh, so learn slower)
 
 # Output
 W2 = torch.randn((num_neurons, 27), generator = g) * 0.01 # Scale down at initialisation to get logits to be near 0 to prevent very high losses at initialisation
@@ -98,9 +98,11 @@ for i in range(steps):
     mini_b_idxs = torch.randint(0, Xtr.shape[0], (mini_batch_size,))
 
     # Forward pass:
-    embedding = C[Xtr[mini_b_idxs]]
-    H = torch.tanh(embedding.view(embedding.shape[0], n_dimensions * block_size) @ W1 + B1)
-    logits = H @ W2 + B2
+    embedding = C[Xtr[mini_b_idxs]] # Embed characters into vectors
+    embedding_concat = embedding.view(embedding.shape[0], - 1) # Concatenate all vectors
+    h_pre_activation = embedding_concat @ W1 + B1 # Hidden layer pre-activation
+    H = torch.tanh(h_pre_activation) # Hidden layer
+    logits = H @ W2 + B2 # Output layer
 
     # Softmax (Classication)
     loss = F.cross_entropy(logits, Ytr[mini_b_idxs])
@@ -125,6 +127,21 @@ print(f"TrainingLoss {loss.item()}")
 # Plotting the loss over steps
 plt.plot([i for i in range(steps)], losses_i)
 plt.show()
+
+# Plotting the activations in the hidden layer (White = True (In the flat tail of tanh, so the gradient would be vanishing), black = False)
+# If an entire column is white (meaning that all input examples don't land in the active section of the tanh curve), this is a dead neuron, meaning that it will never learn (weights and biases would not change)
+plt.figure(figsize = (20, 10))
+plt.imshow(H.abs() > 0.99, cmap = "gray", interpolation = "nearest")
+plt.show()
+
+# Plotting the pre-activations of the hidden layer
+plt.hist(h_pre_activation.view(-1).tolist(), 50)
+plt.show()
+
+# Plotting the activatons of the hidden layer
+plt.hist(H.view(-1).tolist(), 50)
+plt.show()
+
 
 @torch.no_grad() # Disables gradient tracking
 def split_loss(inputs, targets):
