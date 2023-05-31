@@ -70,14 +70,22 @@ fan_in = n_dimensions * block_size # Number of input elements
 standard_deviation = ((5/3) / (fan_in ** 0.5)) # standard deviation = gain / sqrt(fan_in) [gain is 5/3 for tanh linearity based on Kai Ming paper]
 
 W1 = torch.randn((fan_in, num_neurons), generator = g) * standard_deviation # Scaling down to prevent tanh saturation (Where at initialisation these weights may be in the flat regions of tanh, so learn slower)
-B1 = torch.randn(num_neurons, generator = g) * 0.01 # Scaling down to prevent tanh saturation (Where at initialisation these biases may be in the flat regions of tanh, so learn slower)
+# B1 = torch.randn(num_neurons, generator = g) * 0.01 # Scaling down to prevent tanh saturation (Where at initialisation these biases may be in the flat regions of tanh, so learn slower)
 
 # Output
 W2 = torch.randn((num_neurons, 27), generator = g) * 0.01 # Scale down at initialisation to get logits to be near 0 to prevent very high losses at initialisation
 B2 = torch.randn(27, generator = g) * 0 # logits = H @ W2 + B2, initialise biases to 0 at initialisation
 
+# Batch normalisation (bn = batch normalisation)
+bn_gain = torch.ones((1, num_neurons))
+bn_bias = torch.zeros((1, num_neurons))
+
+# Running as it can be used at inference (testing / eval) without having to estimate it again after training (The replaced section) [Used to calibrate the batch normalisation]
+bn_mean_running = torch.zeros((1, num_neurons)) # h_pre_activation will be unit gaussian, meaning the mean and std will be roughly 0
+bn_std_running = torch.ones((1, num_neurons)) # h_pre_activation will be unit gaussian, meaning the std will be roughly 1
+
 # All parameters
-parameters = [C, W1, B1, W2, B2]
+parameters = [C, W1, W2, B2, bn_gain, bn_bias]
 for p in parameters:
     p.requires_grad = True
 
@@ -105,9 +113,37 @@ for i in range(steps):
     # Forward pass:
     embedding = C[Xtr[mini_b_idxs]] # Embed characters into vectors
     embedding_concat = embedding.view(embedding.shape[0], - 1) # Concatenate all vectors
-    h_pre_activation = embedding_concat @ W1 + B1 # Hidden layer pre-activation
-    H = torch.tanh(h_pre_activation) # Hidden layer
-    logits = H @ W2 + B2 # Output layer
+
+    # ----------------------------------------------
+    # Batch normalisation layer
+
+    # To make activation states to be ROUGHLY gaussian (As in tanh, small numbers would result in inactivity but large numbers would result in saturation so gradient does not flow)
+
+    h_pre_activation = embedding_concat @ W1 # Hidden layer pre-activation
+
+    bn_mean_i = h_pre_activation.mean(0, keepdim = True) # Find mean across the 0th dimension (Mean over all examples in the batch)
+    bn_std_i = h_pre_activation.std(0, keepdim = True) # Find standard deviation across the 0th dimension (std over all examples in the batch)
+
+    # Note: Every neuron's firing rate will be unit gaussian on this mini-batch at initialisation
+    # In backpropagation, bn_gain and bn_bias will be altered (used so that the neurons are not forced to be gaussian for every batch)
+    # (h_pre_activation - bn_mean_i) / bn_std_i) = Normalise
+    # bn_gain, bn_bias = scale and shift
+    # Main purpose: Centers the batch to be unit gaussian and then offsetting / scaling by the bn_bias and bn_gain
+    h_pre_activation = (bn_gain * ((h_pre_activation - bn_mean_i) / bn_std_i)) + bn_bias
+
+    with torch.no_grad(): # Update without building a graph
+        # Update running batch normalisation mean and standard deviation
+        bn_mean_running = 0.999 * bn_mean_running + (0.001 * bn_mean_i)
+        bn_std_running = 0.999 * bn_std_running + (0.001 * bn_std_i)
+
+    # ----------------------------------------------
+    # Hidden layer
+
+    H = torch.tanh(h_pre_activation) 
+    # ----------------------------------------------
+    # Output layer
+
+    logits = H @ W2 + B2
 
     # Softmax (Classication)
     loss = F.cross_entropy(logits, Ytr[mini_b_idxs])
@@ -147,11 +183,33 @@ plt.show()
 plt.hist(H.view(-1).tolist(), 50)
 plt.show()
 
+# Calibrate the batch normalisation at the end of training [Replaced with bn_mean_Running and bn_std_running]
+# with torch.no_grad():
+#     # Pass the training set through
+#     embedding = C[Xtr]
+#     embedding_concat = embedding.view(embedding.shape[0], - 1)
+#     h_pre_activation = embedding_concat @ W1 + B1
+
+#     # Measure the mean and standard deviation over the entire training set 
+#     bn_mean = h_pre_activation.mean(0, keepdim = True)
+#     bn_std = h_pre_activation.std(0, keepdim = True)
 
 @torch.no_grad() # Disables gradient tracking
 def split_loss(inputs, targets):
+
     embedding = C[inputs]
-    H = torch.tanh(embedding.view(embedding.shape[0], n_dimensions * block_size) @ W1 + B1)
+    embedding_concat = embedding.view(embedding.shape[0], - 1)
+
+    h_pre_activation = embedding_concat @ W1
+
+    # mean = h_pre_activation.mean(0, keepdim = True)
+    # standard_deviation = h_pre_activation.std(0, keepdim = True)
+    # h_pre_activation = (bn_gain * ((h_pre_activation - mean) / standard_deviation)) + bn_bias
+    # By doing the following, you can input a single example into the network (Since the NN was trained on batches and will expect batches)
+    h_pre_activation = (bn_gain * ((h_pre_activation - bn_mean_running) / bn_std_running)) + bn_bias
+
+    H = torch.tanh(h_pre_activation)
+
     logits = H @ W2 + B2
     loss = F.cross_entropy(logits, targets)
     return loss.item()
@@ -173,7 +231,7 @@ def create_samples(num_samples, block_size, embedding_lookup_table):
 
         while True:
             embedding = embedding_lookup_table[torch.tensor([context])] # [1, block_size, d]
-            hidden = torch.tanh(embedding.view(1, -1) @ W1 + B1) # -1 will find the number of inputs automatically
+            hidden = torch.tanh(embedding.view(1, -1) @ W1) # -1 will find the number of inputs automatically
 
             logits = hidden @ W2 + B2 # Find predictions
             probabilities = F.softmax(logits, dim = 1) # Exponentiates for counts and then normalises them (to sum to 1)
