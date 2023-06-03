@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
 from string import ascii_lowercase as string_ascii_lowercase
 
 g = torch.Generator().manual_seed(2147483647)
@@ -10,7 +11,7 @@ g = torch.Generator().manual_seed(2147483647)
 class Linear:
 
     def __init__(self, fan_in, fan_out, bias = True): # fan_in = no.inputs, fan_out = no.outputs
-        self.weight = torch.randn((fan_in, fan_out), generator = g) / fan_in ** 0.5
+        self.weight = torch.randn((fan_in, fan_out), generator = g) / (fan_in ** 0.5)
         self.bias = torch.zeros(fan_out) if bias else None  
 
     def __call__(self, x):
@@ -165,7 +166,7 @@ with torch.no_grad():
     # Make the last layer less confident
     layers[-1].weight *= 0.1
 
-    # Apply gain to all other layers:
+    # Apply gain to all other layers that are Linear:
     for layer in layers[:-1]:
         if isinstance(layer, Linear):
             layer.weight *= 5/3 # The ideal gain for a tanh unlinearity (via. Kai Ming initialisation paper)
@@ -183,6 +184,7 @@ for p in parameters:
 steps = 200_000
 mini_batch_size = 32
 losses_i = []
+ud = [] # Update to grad:data ratio
 
 for i in range(steps):
 
@@ -227,7 +229,102 @@ for i in range(steps):
     # Track stats
 
     losses_i.append(loss.log10().item())
-
-    # break # AFTER_DEBUG: Remove after optimisation
+    with torch.no_grad():
+        # learning_rate * p.grad).std() = Standard deviation of the update that was applied
+        # p.data.std() = Standard deviation of the contents of the parameter
+        # .log10() for a nicer visualisation
+        # .item() to extract the float
+        ud.append([((learning_rate * p.grad).std() / p.data.std()).log10().item() for p in parameters])
+    
+    if i == 1000:
+        break # AFTER_DEBUG: Remove after optimisation
 
 print(loss)
+
+# Diagnostics:
+
+# Activations distribution
+# Note: Want to avoid activations from compressing on the x axis (a standard deviation that shrinks) [Shrinking to 0 on the x-axis]
+# - The use of the "5/3" gain for the tanh activation counteracts this squashing property
+
+plt.figure(figsize=(20,4)) # Width and height of the plot
+legends = []
+print("Activation distributions")
+for i, layer in enumerate(layers[:-1]): # All layers except the last
+    if isinstance(layer, Tanh):
+        t = layer.out # Activations
+        
+        print("layer %d (%10s): mean %+.2f, std %.2f, saturated: %.2f%%" % (i, layer.__class__.__name__, t.mean(), t.std(), (t.abs() > 0.97).float().mean() * 100))
+
+        # Plots the distribution of activations in each layer (The number of values in each tensor that take on the values in the x axis)
+        hy, hx = torch.histogram(t, density = True)
+        plt.plot(hx[:-1].detach(), hy.detach())
+        legends.append(f"layer {i} ({layer.__class__.__name__}")
+
+print()
+plt.legend(legends)
+plt.title("Activations distribution")
+plt.show()
+
+# Gradients distribution
+# Note: Want to avoid shrinking gradients or exploding gradients (All layers should have roughly the same gradients)
+
+plt.figure(figsize=(20,4))
+legends = []
+print("Gradient distributions")
+for i, layer in enumerate(layers[:-1]): # All layers except the last
+    if isinstance(layer, Tanh):
+        t = layer.out.grad # Gradients
+
+        print("layer %d (%10s): mean %+f, std %e" % (i, layer.__class__.__name__, t.mean(), t.std()))
+
+        # Plots the distribution of gradients in each layer
+        hy, hx = torch.histogram(t, density = True)
+        plt.plot(hx[:-1].detach(), hy.detach())
+        legends.append(f"layer {i} ({layer.__class__.__name__}")
+
+print()
+plt.legend(legends)
+plt.title("Gradients distribution")
+plt.show()
+
+# Weights:Gradient distribution
+
+plt.figure(figsize=(20,4))
+legends = []
+print("Weights:Gradients distribution")
+for i, p in enumerate(parameters):
+    t = p.grad
+
+    # Only weights
+    if p.ndim == 2:
+        
+        # grad:data ratio = Scale of the gradient compared to the scale of the data
+        # Note: If the gradient is too large compared to the data, this is a bad.
+        print("weights %10s | mean %+f | std %e | grad:data ratio %e" % (tuple(p.shape), t.mean(), t.std(), t.std() / p.std()))
+
+        hy, hx = torch.histogram(t, density = True)
+        plt.plot(hx[:-1].detach(), hy.detach())
+        legends.append(f"{i} {tuple(p.shape)}")
+
+plt.legend(legends)
+plt.title("Weights:Gradients distribution")
+plt.show()
+
+# Update:data ratio
+# Note: Shows the rate at which each layer learns over time
+# - Updates that are below -3.0 on the plot are 10^3 times smaller than the size of the data inside each tensor
+plt.figure(figsize=(20,4))
+legends = []
+
+for i, p in enumerate(parameters):
+
+    # Only weights
+    if p.ndim == 2:
+        # Plots the update ratios over time
+        plt.plot([ud[j][i] for j in range(len(ud))])
+        legends.append("param %d" % i)
+
+plt.plot([0, len(ud)], [-3, -3], "k") # These ratios should be 1e-3 (Indicated on plot at -3 with a black line)
+plt.legend(legends)
+plt.show()
