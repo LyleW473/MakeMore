@@ -59,6 +59,8 @@ class BatchNorm1d:
 
         # Normalise to unit variance
         xhat = (x - xmean) / torch.sqrt(xvar + self.eps)
+
+        # Find output
         self.out = self.gamma * xhat + self.beta
 
         # Update buffers
@@ -139,36 +141,51 @@ n_dimensions = 10 # Number of columns for each character embedding vector
 n_hidden = 100 # In the hidden layer
 C = torch.randn((27, n_dimensions), generator = g)
 
+# Note: BatchNorm1d layer can be placed before or after Tanh
+# - It can also be placed after the output layer (Would need to make the batch normalisation layer's gamma less confident instead of layer.weight)
+# - Can remove the /
 layers = [
 
         Linear(fan_in = (n_dimensions * block_size), fan_out = n_hidden), 
+        BatchNorm1d(dim = n_hidden),
         Tanh(),
 
         Linear(fan_in = n_hidden, fan_out = n_hidden),
+        BatchNorm1d(dim = n_hidden),
         Tanh(),
 
         Linear(fan_in = n_hidden, fan_out = n_hidden),
+        BatchNorm1d(dim = n_hidden),
         Tanh(),
 
         Linear(fan_in = n_hidden, fan_out = n_hidden),
+        BatchNorm1d(dim = n_hidden),
         Tanh(),
         
         Linear(fan_in = n_hidden, fan_out = n_hidden),
+        BatchNorm1d(dim = n_hidden),
         Tanh(),
 
         Linear(fan_in = n_hidden, fan_out = 27),
+        BatchNorm1d(dim = 27)
 
         ]   
 
 # Initialising layers:
 with torch.no_grad():
 
-    # Make the last layer less confident
-    layers[-1].weight *= 0.1
+    # # Make the last layer less confident
+    # layers[-1].weight *= 0.1
+
+    # Make the last batch normalisation layer less confident
+    layers[-1].gamma *= 0.1 # Gamma is the property that interacts with the output after normalisation
 
     # Apply gain to all other layers that are Linear:
     for layer in layers[:-1]:
         if isinstance(layer, Linear):
+            # Note: When using batch normalisation layers, changing this value has little effect on the activation, gradient, weights:gradients distributions but will affect the update:ratio.
+            # - This is because of the normalisation
+            # - When changing this gain, the learning rate will have to be updated to prevent the NN from learning too slowly
             layer.weight *= 5/3 # The ideal gain for a tanh unlinearity (via. Kai Ming initialisation paper)
     
 # Embedding lookup table + all the parameters in all of the layers of the NN
@@ -177,7 +194,6 @@ print(f"Total number of parameters: {sum(p.nelement() for p in parameters)}")
 
 for p in parameters:
     p.requires_grad = True
-
 
 
 # Training:
@@ -314,6 +330,8 @@ plt.show()
 # Update:data ratio
 # Note: Shows the rate at which each layer learns over time
 # - Updates that are below -3.0 on the plot are 10^3 times smaller than the size of the data inside each tensor
+# - Want all weights to train at roughly the same rate, and not too slow
+
 plt.figure(figsize=(20,4))
 legends = []
 
