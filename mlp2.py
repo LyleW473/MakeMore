@@ -66,8 +66,15 @@ C = torch.randn((27, n_dimensions), generator = g)
 num_neurons = 200 # In the hidden layer
 
 # Note: We want the mean and standard deviation for the inputs and pre-activations to be roughly the same to preserve the gaussian / normal distribution
+# - This is to have similar activations throughout the neural network
+# - Activation functions that can produce activations with a gaussian-like distributiion can reduce issues where gradients explode or vanish through training.
+# - As the magnitudes of gradients are less likely to be extremely large / small
 fan_in = n_dimensions * block_size # Number of input elements
-standard_deviation = ((5/3) / (fan_in ** 0.5)) # standard deviation = gain / sqrt(fan_in) [gain is 5/3 for tanh linearity based on Kai Ming paper]
+
+# - The gain is used because tanh is a squashing function so is used to "negate" this effect
+# - The weights are initialised as a gaussian so will have std 1 first, so to make std = gain / sqrt(fan_in), we multiply the weights by the gain / sqrt(fan_in)
+# - standard deviation = gain / sqrt(fan_in) [gain is 5/3 for tanh linearity based on Kai Ming paper]
+standard_deviation = ((5/3) / (fan_in ** 0.5)) 
 
 W1 = torch.randn((fan_in, num_neurons), generator = g) * standard_deviation # Scaling down to prevent tanh saturation (Where at initialisation these weights may be in the flat regions of tanh, so learn slower)
 # B1 = torch.randn(num_neurons, generator = g) * 0.01 # Scaling down to prevent tanh saturation (Where at initialisation these biases may be in the flat regions of tanh, so learn slower)
@@ -79,7 +86,7 @@ B2 = torch.randn(27, generator = g) * 0 # logits = H @ W2 + B2, initialise biase
 # Batch normalisation (bn = batch normalisation)
 bn_gain = torch.ones((1, num_neurons))
 bn_bias = torch.zeros((1, num_neurons))
-
+epsilon = 1e-5 # Used to find xhat (xi - bnmean) / sqrt(variance + epsilon), used to prevent a division by 0. (xi = h_pre_activation)
 # Running as it can be used at inference (testing / eval) without having to estimate it again after training (The replaced section) [Used to calibrate the batch normalisation]
 bn_mean_running = torch.zeros((1, num_neurons)) # h_pre_activation will be unit gaussian, meaning the mean and std will be roughly 0
 bn_std_running = torch.ones((1, num_neurons)) # h_pre_activation will be unit gaussian, meaning the std will be roughly 1
@@ -108,28 +115,30 @@ mini_batch_size = 32
 for i in range(steps):
 
     # Generate mini batch
-    mini_b_idxs = torch.randint(0, Xtr.shape[0], (mini_batch_size,))
+    mini_b_idxs = torch.randint(0, Xtr.shape[0], (mini_batch_size,), generator = g)
 
     # Forward pass:
     embedding = C[Xtr[mini_b_idxs]] # Embed characters into vectors
     embedding_concat = embedding.view(embedding.shape[0], - 1) # Concatenate all vectors
 
+    # Linear layer
+    h_pre_activation = embedding_concat @ W1 # Hidden layer pre-activation
+
     # ----------------------------------------------
     # Batch normalisation layer
 
-    # To make activation states to be ROUGHLY gaussian (As in tanh, small numbers would result in inactivity but large numbers would result in saturation so gradient does not flow)
-
-    h_pre_activation = embedding_concat @ W1 # Hidden layer pre-activation
+    # To make activation states to be ROUGHLY gaussian (To avoid vanishing / exploding gradients)
 
     bn_mean_i = h_pre_activation.mean(0, keepdim = True) # Find mean across the 0th dimension (Mean over all examples in the batch)
     bn_std_i = h_pre_activation.std(0, keepdim = True) # Find standard deviation across the 0th dimension (std over all examples in the batch)
 
     # Note: Every neuron's firing rate will be unit gaussian on this mini-batch at initialisation
     # In backpropagation, bn_gain and bn_bias will be altered (used so that the neurons are not forced to be gaussian for every batch)
-    # (h_pre_activation - bn_mean_i) / bn_std_i) = Normalise
-    # bn_gain, bn_bias = scale and shift
+    # (h_pre_activation - bn_mean_i) / bn_std_i) = Normalise to find xhat [xhat = (xi - bnmean) / sqrt(variance + epsilon), where xi = h_pre_activation]
+    # bn_gain, bn_bias = scale and shift (final output)
+    # + epsilon to avoid division by 0
     # Main purpose: Centers the batch to be unit gaussian and then offsetting / scaling by the bn_bias and bn_gain
-    h_pre_activation = (bn_gain * ((h_pre_activation - bn_mean_i) / bn_std_i)) + bn_bias
+    h_pre_activation = (bn_gain * ((h_pre_activation - bn_mean_i) / (bn_std_i + epsilon))) + bn_bias
 
     with torch.no_grad(): # Update without building a graph
         # Update running batch normalisation mean and standard deviation
@@ -176,10 +185,13 @@ plt.imshow(H.abs() > 0.99, cmap = "gray", interpolation = "nearest")
 plt.show()
 
 # Plotting the pre-activations of the hidden layer
+# Note: Want a smaller range of the x values so that there is less saturation in the activations of the hidden layer
+# - This is because the tanh is a squashing function, so a broad range of pre-activations (where values are extreme) will mean that many values will be squashed and capped to -1 and 1
 plt.hist(h_pre_activation.view(-1).tolist(), 50)
 plt.show()
 
 # Plotting the activatons of the hidden layer
+# Note: Want to avoid saturation on the tails of tanh (-1 and 1)
 plt.hist(H.view(-1).tolist(), 50)
 plt.show()
 
@@ -230,10 +242,20 @@ def create_samples(num_samples, block_size, embedding_lookup_table):
         context = [0] * block_size # Initialise with special case character "."
 
         while True:
-            embedding = embedding_lookup_table[torch.tensor([context])] # [1, block_size, d]
-            hidden = torch.tanh(embedding.view(1, -1) @ W1) # -1 will find the number of inputs automatically
 
-            logits = hidden @ W2 + B2 # Find predictions
+            embedding = embedding_lookup_table[torch.tensor([context])] # [1, block_size, number of columns in the embedding], shape = [1, 6, 10]
+            embedding_concat = embedding.view(1, -1) # -1 will find the number of inputs automatically , shape = [1, 60]
+
+            # Dot product
+            h_pre_activation = embedding_concat @ W1 # [1, 60] @ [60, 200] ---> [1, 200] (In this order)
+
+            # Batch normalisation
+            h_pre_activation = (bn_gain * ((h_pre_activation - bn_mean_running) / bn_std_running)) + bn_bias
+
+            # Activation function
+            H = torch.tanh(h_pre_activation)
+
+            logits = H @ W2 + B2 # Find predictions
             probabilities = F.softmax(logits, dim = 1) # Exponentiates for counts and then normalises them (to sum to 1)
 
             # Generate the next character using the probabiltiy distribution outputted by the NN
@@ -249,7 +271,7 @@ def create_samples(num_samples, block_size, embedding_lookup_table):
             if idx == 0:
                 break
         
-        samples.append(word)
+        samples.append(word[:-1])
 
     return samples
 
