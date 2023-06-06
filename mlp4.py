@@ -170,6 +170,7 @@ for i in range(steps):
     
     loss.backward()
     break
+# ---------------------------------------------
 
 # Manual backpropagation: (Calculated by hand) [Exercise 1]
 
@@ -422,6 +423,9 @@ for i in range(Xtr[mini_b_idxs].shape[0]):
 cmp("d_C", d_C, C)
 
 
+# ---------------------------------------------
+
+
 # Cross entropy loss backward pass [Exercise 2]
 # The derivative for items at the Y labels with respect to the loss is: (e^a / (e^a + e^b + e^c + e^d)) - 1 if a is in "y" labels, otherwise it is (e^a / (e^a + e^b + e^c + e^d))
 
@@ -479,3 +483,32 @@ cmp("logits", d_logits, logits)
 # dLoss/di = (e^a / (e^a + e^b + e^c + e^d))
 
 # Hence to find the derivative of the loss with respect to any variable "a", use (e^a / (e^a + e^b + e^c + e^d)) - 1 (If i == "a" ["a" is a y-label]) else (e^a / (e^a + e^b + e^c + e^d))
+
+
+# ---------------------------------------------
+
+
+# Backward pass through batch normalisation layer [Exercise 3]
+# - Given h_pre_activation, find d_h_pre_batch_norm i.e. dLoss / dxi
+
+h_pre_activation_fast = (bn_gain * ((h_pre_batch_norm - h_pre_batch_norm.mean(0, keepdim = True)) / torch.sqrt(h_pre_batch_norm.var(0, keepdim = True, unbiased = True) + epsilon))) + bn_bias
+
+# Explanation:
+
+# yi = gamma * (xhat) + beta
+# xhat = (xi - mean) / (sqrt(variance + epsilon))
+# variance = (1 / (m - 1)) * sum((xi - mean) ** 2)
+# mean = (1/m) * sum(xi)
+
+# dL/dyi (found by deriving yi = gamma * (xhat) + beta)
+# dL/dxhati = dL/dyi * dyi/dxhati
+# dL/variance = sum(dL/dxhati) * dxhati/dvariance
+# dL/dmean = (sum(dL/dxhat) * dxhat/dmean) + (dL/dvariance * dvariance/dmean) [Additive as there are multiple times in which the mean was used in calculations]
+# dL/dxi = (dL/dxhati * dxhati/dxi) + (dL/dmean * dmean/dxi) + (dL/dvariance * dvariance/dxi) [Additive as there are multiple times in which the xi was used in calculations]
+# When substituting each expression into dL/dxi and simplifying:
+# The equation is ((gamma * ((variance + epsilon) ** -0.5)) / m) * ( (m * dl/dyi) - (sum(dL/dyj)) - ( (m/(m-1)) * xhati * sum(dL/dyj * xhatj)) )
+
+m = batch_size
+d_h_pre_batch_norm = ((bn_gain * ((bn_variance + epsilon) ** -0.5)) / m) * ( (m * d_h_pre_activation) - (d_h_pre_activation.sum(0)) - ((m/(m-1)) * bn_raw * (d_h_pre_activation * bn_raw).sum(0)))
+# The same as: d_h_pre_batch_norm = bn_gain * bn_variance_inv/m * (m * d_h_pre_activation - d_h_pre_activation.sum(0) - m/(m-1)*bn_raw*(d_h_pre_activation*bn_raw).sum(0))
+cmp("h_pre_batch_norm", d_h_pre_batch_norm, h_pre_batch_norm)
