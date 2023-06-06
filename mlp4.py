@@ -420,3 +420,62 @@ for i in range(Xtr[mini_b_idxs].shape[0]):
         d_C[idx] += d_embedding[i][j]
 
 cmp("d_C", d_C, C)
+
+
+# Cross entropy loss backward pass [Exercise 2]
+# The derivative for items at the Y labels with respect to the loss is: (e^a / (e^a + e^b + e^c + e^d)) - 1 if a is in "y" labels, otherwise it is (e^a / (e^a + e^b + e^c + e^d))
+
+loss_fast = F.cross_entropy(logits, Ytr[mini_b_idxs])
+print(loss_fast.item(), "difference:", (loss_fast - loss).item())
+
+# Set derivative of all logits as (e^a / (e^a + e^b + e^c + e^d)) [as in either case where "a" is in or not in y labels, the derivative of the loss with respect to each logit is (e^a / (e^a + e^b + e^c + e^d))]
+# Derivative of the loss with respect to each logit regardless of if the logit("a") is in the y-labels is (e^a / (e^a + e^b + e^c + e^d))
+d_logits = F.softmax(logits, 1) # Softmax across rows
+
+#  Derivative of the loss with respect to a logit inside of the y-labels is (e^a / (e^a + e^b + e^c + e^d)) - 1
+d_logits[range(batch_size), Ytr[mini_b_idxs]] -= 1 
+# loss = the average of the losses, so d_logits needs to be scaled down by batch_size
+d_logits /= batch_size
+cmp("logits", d_logits, logits)
+
+# Full derivation:
+# log_probs = probs.log()
+# loss = -log_probs[range(batch_size), Ytr[mini_b_idxs]].mean()
+
+
+# Simplified:
+# loss = -log(e^a / (e^a + e^b + e^c + e^d))
+# loss = -ln(e^a / (e^a + e^b + e^c + e^d)) [ln as .log() in PyTorch is the natural logarithm]
+# loss = ln( (e^a + e^b + e^c + e^d) / e^a )
+# Using the quotient log rule: ln(x/y) = ln(x) − ln(y)
+# loss = ln(e^a + e^b + e^c + e^d) - ln(e^a)
+# Using the rule: ln(e^x) = x
+# loss = ln(e^a + e^b + e^c + e^d) - a
+
+# To find derivative of the loss with respect to any variable i:
+
+
+# y = ln(e^a + e^b + e^c + e^d) 
+# u = e^a + e^b + e^c + e^d
+
+# If i == a: (i.e. "a" is an y-label)
+
+# du/di = e^a
+# dy/di = (du/da) / u [The rule where if y = ln(u), dy/du = u'/u]
+# dy/di = e^a / (e^a + e^b + e^c + e^d)
+
+# Therefore if loss = ln(e^a + e^b + e^c + e^d) - a: 
+# dLoss/di = dy/di + d/da(-a)
+# dLoss/di = (e^a / (e^a + e^b + e^c + e^d)) + (-1)
+# dLoss/di = (e^a / (e^a + e^b + e^c + e^d)) - 1
+
+# If i != a:
+
+# du/di = e^a
+# dy/di = (du/da) / u [The rule where if y = ln(u), dy/du = u'/u]
+# dy/di = e^a / (e^a + e^b + e^c + e^d)
+
+# dLoss/di = dy/di
+# dLoss/di = (e^a / (e^a + e^b + e^c + e^d))
+
+# Hence to find the derivative of the loss with respect to any variable "a", use (e^a / (e^a + e^b + e^c + e^d)) - 1 (If i == "a" ["a" is a y-label]) else (e^a / (e^a + e^b + e^c + e^d))
