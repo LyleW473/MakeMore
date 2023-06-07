@@ -98,7 +98,7 @@ for p in parameters:
 
 print(f"Total number of parameters: {sum(p.nelement() for p in parameters)}")
 
-steps = 200000
+steps = 200_000
 batch_size = 32
 
 # Training
@@ -169,10 +169,16 @@ for i in range(steps):
         t.retain_grad()
     
     loss.backward()
-    break
+
+    # Update weights
+    learning_rate = 0.1 if i < (steps / 2) else 0.01
+
+    for p in parameters:
+        p.data += -(learning_rate * p.grad)
+
 # ---------------------------------------------
 
-# Manual backpropagation: (Calculated by hand) [Exercise 1]
+# Manual backpropagation (Calculated by hand) [Exercise 1]
 
 # loss = -log_probs[range(batch_size), Ytr[mini_b_idxs]].mean()
 # dLoss/dLogProbs = -1/batch_size (for all items in log_probs)
@@ -512,3 +518,248 @@ m = batch_size
 d_h_pre_batch_norm = ((bn_gain * ((bn_variance + epsilon) ** -0.5)) / m) * ( (m * d_h_pre_activation) - (d_h_pre_activation.sum(0)) - ((m/(m-1)) * bn_raw * (d_h_pre_activation * bn_raw).sum(0)))
 # The same as: d_h_pre_batch_norm = bn_gain * bn_variance_inv/m * (m * d_h_pre_activation - d_h_pre_activation.sum(0) - m/(m-1)*bn_raw*(d_h_pre_activation*bn_raw).sum(0))
 cmp("h_pre_batch_norm", d_h_pre_batch_norm, h_pre_batch_norm)
+
+# ---------------------------------------------
+# Putting everything together (all of the manual backpropagation together) [Exercise 4]
+
+# Re-initialising NN:
+
+g = torch.Generator().manual_seed(2147483647)
+n_embedding = 10 
+n_hidden = 200
+fan_in = n_embedding * block_size
+standard_deviation = ((5/3) / (fan_in ** 0.5)) 
+
+C = torch.randn((27, n_embedding), generator = g)
+
+# Hidden
+W1 = torch.randn((fan_in, n_hidden), generator = g) * standard_deviation
+B1 = torch.randn(n_hidden, generator = g) * 0.1 # Usually not required when a batch normalisation layer is used [Used for manual backpropagation for fun]
+
+# Output
+W2 = torch.randn((n_hidden, 27), generator = g) * 0.1
+B2 = torch.randn(27, generator = g) * 0.1
+
+# Batch normalisation parameters
+bn_gain = torch.ones((1, n_hidden)) * 0.1 + 1.0
+bn_bias = torch.zeros((1, n_hidden)) * 0.1
+epsilon = 1e-5
+
+# All parameters
+parameters = [C, W1, B1, W2, B2, bn_gain, bn_bias]
+for p in parameters:
+    p.requires_grad = True
+
+print(f"Total number of parameters: {sum(p.nelement() for p in parameters)}")
+
+print(f"Automatic: {loss.item()}")
+
+# Training
+
+with torch.no_grad(): # No longer using PyTorch's automatic loss.backward(), so don't need to keep track of gradients
+    for i in range(steps):
+
+        # Generate mini batch
+        mini_b_idxs = torch.randint(0, Xtr.shape[0], (batch_size,), generator = g)
+
+        # Forward pass:
+        embedding = C[Xtr[mini_b_idxs]]
+        embedding_concat = embedding.view(embedding.shape[0], -1)
+
+        # Linear layer 1
+        h_pre_batch_norm = embedding_concat @ W1 + B1
+
+        # ----------------------------------------------
+        # Batch normalisation layer
+
+        bn_mean_i = (1 / batch_size) * h_pre_batch_norm.sum(0, keepdim = True)
+        bn_diff = h_pre_batch_norm - bn_mean_i
+        bn_diff2 = bn_diff ** 2
+
+        # Note: Bessel's correction (dividing by n-1 not n) 
+        # - n-1 = unbiased variance, n = biased variance, which is Used to get better estimate for variance for small samples for a population
+        #- Used here because we are using mini-batches (small sample for a large population)
+        bn_variance = (1 / (batch_size - 1)) * (bn_diff2).sum(0, keepdim = True)
+        bn_variance_inv = (bn_variance + epsilon) ** -0.5
+        bn_raw = bn_diff * bn_variance_inv
+        h_pre_activation = (bn_gain * bn_raw) + bn_bias
+
+        # ----------------------------------------------
+        # Hidden layer
+
+        H = torch.tanh(h_pre_activation) 
+
+        # ----------------------------------------------
+        # Output layer (Linear layer 2)
+
+        logits = H @ W2 + B2
+        
+        # ----------------------------------------------
+        # Cross entropy loss (Same as loss = F.cross_entropy(logits, Ytr[mini_b_idxs]))
+
+        logit_maxes = logits.max(1, keepdim = True).values # Find the maximum in each row
+        norm_logits = logits - logit_maxes # Subtract maxes for numerical stability so that we don't exponentiate logits with extreme values 
+
+        # Softmax
+        counts = norm_logits.exp()
+        counts_sum = counts.sum(1, keepdims = True)
+        counts_sum_inv = counts_sum ** -1 # Same as (1.0 / counts_sum), but sometimes yields incorrect results when performing backpropagation with PyTorch
+        probs = counts * counts_sum_inv
+
+        log_probs = probs.log()
+        loss = -log_probs[range(batch_size), Ytr[mini_b_idxs]].mean()
+
+        # ----------------------------------------------
+        # Backpropagation
+
+        # Zero-grad
+        for p in parameters:
+            p.grad = None
+        
+        # -----------------------------
+        # Output (layer)
+            
+        # d_log_probs = torch.zeros_like(log_probs)
+        # d_probs = (1.0 / probs) * d_log_probs
+        # d_counts_sum_inv = (d_probs * counts).sum(1, keepdim = True)	
+        # d_counts = d_probs * counts_sum_inv
+        # d_counts_sum = d_counts_sum_inv * (-(counts_sum ** -2))
+        # d_counts += torch.ones_like(counts) * d_counts_sum 
+        # d_norm_logits = d_counts * counts
+        # d_logits = d_norm_logits.clone()
+        # d_logit_maxes = (-d_norm_logits).sum(1, keepdim = True)
+        # d_logits += d_logit_maxes * F.one_hot(logits.max(1).indices, num_classes = 27)
+
+        # Above code can be replaced with this:
+        d_logits = F.softmax(logits, 1)
+        d_logits[range(batch_size), Ytr[mini_b_idxs]] -= 1 
+        d_logits /= batch_size
+
+        # -----------------------------
+        # Hidden layer (Linear layer 2)
+
+        d_H = d_logits @ W2.T
+        d_W2 = H.T @ d_logits
+        d_B2 = d_logits.sum(0, keepdim = False)
+
+        # -----------------------------
+        # Non-linearity
+
+        d_h_pre_activation = d_H * (1.0 - (H ** 2))
+
+        # -----------------------------
+        # Batch normalisation layer
+
+        # d_bn_gain = (d_h_pre_activation * bn_raw).sum(0, keepdim = True)
+        # d_bn_raw = (d_h_pre_activation * bn_gain)
+        # d_bn_bias = d_h_pre_activation.sum(0, keepdim = True)
+        # d_bn_diff = d_bn_raw * bn_variance_inv 
+        # d_bn_variance_inv = (d_bn_raw * bn_diff).sum(0, keepdim = True)
+        # d_bn_variance = d_bn_variance_inv * (-0.5 * ((bn_variance + epsilon) ** (-1.5)))
+        # d_bn_diff2 = d_bn_variance * ((1.0 / (batch_size - 1)) * torch.ones_like(bn_diff2))	
+        # d_bn_diff += d_bn_diff2 * (2 * bn_diff)
+        # d_h_pre_batch_norm = d_bn_diff.clone()
+        # d_bn_mean_i = -d_bn_diff.sum(0, keepdim = True)
+        # d_h_pre_batch_norm += d_bn_mean_i * (1.0 / batch_size) * torch.ones_like(h_pre_batch_norm)
+
+        # Above code can be replaced with this:
+
+        d_bn_gain = (d_h_pre_activation * bn_raw).sum(0, keepdim = True)
+        d_bn_bias = d_h_pre_activation.sum(0, keepdim = True)
+        d_h_pre_batch_norm = ((bn_gain * ((bn_variance + epsilon) ** -0.5)) / m) * ( (m * d_h_pre_activation) - (d_h_pre_activation.sum(0)) - ((m/(m-1)) * bn_raw * (d_h_pre_activation * bn_raw).sum(0)))
+
+        # -----------------------------
+        # Linear layer 1
+
+        d_embedding_concat = d_h_pre_batch_norm @ W1.T
+        d_W1 = embedding_concat.T @ d_h_pre_batch_norm	
+        d_B1 = d_h_pre_batch_norm.sum(0, keepdim = False) 
+        
+        # -----------------------------
+        # Input (layer)
+
+        d_embedding = d_embedding_concat.view(embedding.shape)
+        d_C = torch.zeros_like(C)
+        for j in range(Xtr[mini_b_idxs].shape[0]):
+            for k in range(Xtr[mini_b_idxs].shape[1]):
+                idx = Xtr[mini_b_idxs][j][k]
+                d_C[idx] += d_embedding[j][k]
+        
+        # -----------------------------
+        # Update parameters
+
+        # parameters = [C, W1, B1, W2, B2, bn_gain, bn_bias] so:
+        grads = [d_C, d_W1, d_B1, d_W2, d_B2, d_bn_gain, d_bn_bias]
+        
+        learning_rate = 0.1 if i < (steps / 2) else 0.01
+
+        for p, grad in zip(parameters, grads):
+            # Automatic backpropagating (with loss.backward())
+            # p.data += -(learning_rate * p.grad)
+
+            # When manually backpropagating:
+            p.data += -(learning_rate * grad)
+
+
+print(f"Manual: {loss.item()}")
+
+@torch.no_grad() # Disables gradient tracking
+def split_loss(inputs, targets):
+
+    embedding = C[inputs]
+    embedding_concat = embedding.view(embedding.shape[0], - 1)
+    h_pre_activation = embedding_concat @ W1
+    h_pre_activation = (bn_gain * ((h_pre_activation - bn_mean_i) / ((bn_variance + epsilon) ** 0.5))) + bn_bias
+    H = torch.tanh(h_pre_activation)
+    logits = H @ W2 + B2
+    loss = F.cross_entropy(logits, targets)
+    return loss.item()
+
+print(f"TrainLoss:{split_loss(inputs = Xtr, targets = Ytr)}")
+print(f"DevLoss:{split_loss(inputs = Xdev, targets = Ydev)}")
+print(f"TestLoss:{split_loss(inputs = Xte, targets = Yte)}")
+
+def create_samples(num_samples, block_size, embedding_lookup_table):
+    g = torch.Generator().manual_seed(2147483647 + 10)
+
+    samples = []
+
+    for _ in range(num_samples):
+        word = ""
+        context = [0] * block_size # Initialise with special case character "."
+
+        while True:
+
+            embedding = embedding_lookup_table[torch.tensor([context])] # [1, block_size, number of columns in the embedding], shape = [1, 6, 10]
+            embedding_concat = embedding.view(1, -1) # -1 will find the number of inputs automatically , shape = [1, 60]
+
+            # Dot product
+            h_pre_activation = embedding_concat @ W1 # [1, 60] @ [60, 200] ---> [1, 200] (In this order)
+
+            # Batch normalisation
+            h_pre_activation = (bn_gain * ((h_pre_activation - bn_mean_i) / ((bn_variance + epsilon) ** 0.5))) + bn_bias
+
+            # Activation function
+            H = torch.tanh(h_pre_activation)
+
+            logits = H @ W2 + B2 # Find predictions
+            probabilities = F.softmax(logits, dim = 1) # Exponentiates for counts and then normalises them (to sum to 1)
+
+            # Generate the next character using the probabiltiy distribution outputted by the NN
+            idx = torch.multinomial(probabilities, num_samples = 1, generator = g).item()
+            
+            # Update the context
+            context = context[1:] + [idx]
+            
+            # Add character corresponding to the index
+            word += i_to_s[idx]
+
+            # Found the special character "."
+            if idx == 0:
+                break
+        
+        samples.append(word[:-1])
+
+    return samples
+
+print(f"Samples: {create_samples(num_samples = 30, block_size = block_size, embedding_lookup_table = C)}")
