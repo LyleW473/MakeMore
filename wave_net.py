@@ -212,7 +212,11 @@ for i in range(steps):
 print(f"Training loss: {loss.item()}")
 
 # Plotting the loss over steps
-plt.plot([i for i in range(steps)], losses_i)
+
+# Take the number of "steps" losses and convert to a 2-D tensor with 1000 columns in each row, and then take the mean across that row
+losses_i = torch.tensor(losses_i).view(-1, 1000).mean(1) 
+
+plt.plot(losses_i)
 plt.show()
     
 @torch.no_grad() # Disables gradient tracking
