@@ -1,5 +1,6 @@
 # Building a WaveNet
 
+from typing import Any
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
@@ -81,7 +82,41 @@ class Tanh:
     def parameters(self):
         return []
 
+class Embedding: # Acts as a "replacement" for the C-lookup table
+    def __init__(self, num_embeddings, embedding_dimension):
+        self.weight = torch.randn((num_embeddings, embedding_dimension))
+    
+    def __call__(self, IDX):
+        self.out = self.weight[IDX]
+        return self.out
+    
+    def parameters(self):
+        return [self.weight]
 
+class Flatten: # Used to concatenate the vectors of embeddings of a batch
+
+    def __call__(self, x):
+        self.out = x.view(x.shape[0], -1)
+        return self.out
+
+    def parameters(self):
+        return []
+
+class Sequential: # Replaces the Python list used for "layers" previously
+
+    def __init__(self, layers):
+        self.layers = layers
+    
+    def __call__(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        self.out = x
+        return self.out
+
+    def parameters(self):
+        # All the parameters in all of the layers of the NN
+        return [p for layer in self.layers for p in layer.parameters()]
+    
 # Load words
 words = open("names.txt", "r").read().splitlines()
 
@@ -135,38 +170,41 @@ print(f"Test: X: {Xte.shape} Y: {Yte.shape}")
 
 torch.manual_seed(42) # Seed rng for reproducibility
 
-# Creating layers:
+# Initialising the model
 n_dimensions = 10 # Number of columns for each character embedding vector
 n_hidden = 200 # In the hidden layer
-C = torch.randn((27, n_dimensions))
+mini_batch_size = 32 # Batch size
 
-layers = [
+model = Sequential(
+                    [ 
+                    
+                    # Each batch will go through the C lookup table to find the embedding (Shape will be [mini_batch_size, block_size, n_dimensions])
+                    Embedding(num_embeddings = 27, embedding_dimension = n_dimensions),
+                    # Concatenation of vectors (Shape will become [mini_batch_size, block_size * n_dimensions])
+                    Flatten(),
 
-        Linear(fan_in = (n_dimensions * block_size), fan_out = n_hidden, bias = False), 
-        BatchNorm1d(dim = n_hidden),
-        Tanh(),
+                    Linear(fan_in = (n_dimensions * block_size), fan_out = n_hidden, bias = False), 
+                    BatchNorm1d(dim = n_hidden),
+                    Tanh(),
 
-        Linear(fan_in = n_hidden, fan_out = 27),
+                    Linear(fan_in = n_hidden, fan_out = 27),
 
-        ]
+                    ]
+                    )
 
 with torch.no_grad():
     # Make the last layer less confident
-    layers[-1].weight *= 0.1
-    
-# Embedding lookup table + all the parameters in all of the layers of the NN
-parameters = [C] + [p for layer in layers for p in layer.parameters()]
+    model.layers[-1].weight *= 0.1
+
+parameters = model.parameters()
 print(f"Total number of parameters: {sum(p.nelement() for p in parameters)}")
 
 for p in parameters:
     p.requires_grad = True
 
-
 # Training:
 steps = 200_000
-mini_batch_size = 32
 losses_i = []
-ud = [] # Update to grad:data ratio
 
 for i in range(steps):
 
@@ -176,15 +214,14 @@ for i in range(steps):
     # ----------------------------------------------
     # Forward pass
 
-    embedding = C[Xtr[mini_b_idxs]] # Embed characters into vectors
-    embedding_concat = embedding.view(embedding.shape[0], -1) # Concatenate all vectors
+    # The mini batch indexes for the C Lookup table (which exists within layers)
+    indexes = Xtr[mini_b_idxs]
     
-    # Batch normalisation, find activations, etc..
-    for layer in layers:
-        embedding_concat = layer(embedding_concat)
+    # Indexing embedding look-up table, concatenation, batch normalisation, find activations, etc..
+    logits = model(indexes)
 
     # Softmax (Classication)
-    loss = F.cross_entropy(embedding_concat, Ytr[mini_b_idxs]) # embedding_concat will be the logits at this point
+    loss = F.cross_entropy(logits, Ytr[mini_b_idxs]) # x will be the logits at this point
 
     # ----------------------------------------------
     # Backpropagation
@@ -209,36 +246,39 @@ for i in range(steps):
 
     losses_i.append(loss.log10().item())
 
-print(f"Training loss: {loss.item()}")
+if steps >= 1000:
+    print(f"Training loss: {loss.item()}")
 
-# Plotting the loss over steps
+    # Plotting the loss over steps
 
-# Take the number of "steps" losses and convert to a 2-D tensor with 1000 columns in each row, and then take the mean across that row
-losses_i = torch.tensor(losses_i).view(-1, 1000).mean(1) 
+    # Take the number of "steps" losses and convert to a 2-D tensor with 1000 columns in each row, and then take the mean across that row
+    losses_i = torch.tensor(losses_i).view(-1, 1000).mean(1) 
 
-plt.plot(losses_i)
-plt.show()
+    plt.plot(losses_i)
+    plt.show()
     
 @torch.no_grad() # Disables gradient tracking
 def split_loss(inputs, targets):
+    
+    # Forward pass
+    logits = model(inputs)
 
-    embedding = C[inputs]
-    embedding_concat = embedding.view(embedding.shape[0], -1) # Shape = [N, block_size * n_dimensions]
-    for layer in layers:
-        embedding_concat = layer(embedding_concat)
-    loss = F.cross_entropy(embedding_concat, targets)
+    # Cross-entropy loss
+    loss = F.cross_entropy(logits, targets)
+
     return loss.item()
 
 # Put layers into evaluation mode
-for layer in layers:
+# Note: without this, this would produce an error when attempting to generate samples using a single example (the context) 
+# - This is because the batchnorm layer would attempt to estimate the variance over a single number (batch_variance in BatchNorm1D), which would be "nan" (not a number)
+for layer in model.layers:
     layer.training = False
 
 print(f"TrainLoss:{split_loss(inputs = Xtr, targets = Ytr)}")
 print(f"DevLoss:{split_loss(inputs = Xdev, targets = Ydev)}")
 print(f"TestLoss:{split_loss(inputs = Xte, targets = Yte)}")
 
-def create_samples(num_samples, block_size, embedding_lookup_table):
-    g = torch.Generator().manual_seed(2147483647 + 10)
+def create_samples(num_samples, block_size):
 
     samples = []
 
@@ -247,19 +287,17 @@ def create_samples(num_samples, block_size, embedding_lookup_table):
         context = [0] * block_size # Initialise with special case character "."
 
         while True:
+            
+            x = torch.tensor([context])
 
-            embedding = C[torch.tensor([context])] # [1, block_size, n_dimensions]
-            embedding_concat = embedding.view(embedding.shape[0], -1) # [1, (block_size * n_dimensions)]
-
-            # Forward pass through layers (The end product will be the logits)
-            for layer in layers:
-                embedding_concat = layer(embedding_concat)
+            # Find logits through model
+            logits = model(x)
 
             # Create probability distribution from logits
-            probabilities = F.softmax(embedding_concat, dim = 1)
+            probabilities = F.softmax(logits, dim = 1)
 
-            # Generate the next character using the probabiltiy distribution outputted by the NN
-            idx = torch.multinomial(probabilities, num_samples = 1, generator = g).item()
+            # Generate the next character using the probability distribution outputted by the NN
+            idx = torch.multinomial(probabilities, num_samples = 1).item()
             
             # Update the context
             context = context[1:] + [idx]
@@ -275,4 +313,4 @@ def create_samples(num_samples, block_size, embedding_lookup_table):
 
     return samples
 
-print(f"Samples: {create_samples(num_samples = 30, block_size = block_size, embedding_lookup_table = C)}")
+print(f"Samples: {create_samples(num_samples = 30, block_size = block_size)}")
