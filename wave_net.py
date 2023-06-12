@@ -1,6 +1,5 @@
 # Building a WaveNet
 
-from typing import Any
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
@@ -48,8 +47,22 @@ class BatchNorm1d:
 
         # Training
         if self.training:
-            xmean = x.mean(0, keepdim = True) # Batch mean
-            xvar = x.var(0, keepdim = True) # Batch variance
+
+            
+            # Notes: 
+            # - dim should be (0, 1) if x is 3- dimensional (so that the mean is taken across all examples in a batch)
+            # - self.running_mean should be of shape [1, 1, 200] not [1, 4, 200] 
+            # - i.e. the mean should be taken over all the examples and "pairings"
+
+            # Otherwise, dim should be 0 as usual
+            # - self.running_mean should be [1, 200]
+            if x.ndim == 2:
+                dim = 0
+            elif x.ndim == 3:
+                dim = (0, 1)
+            
+            xmean = x.mean(dim, keepdim = True) # Batch mean
+            xvar = x.var(dim, keepdim = True) # Batch variance
         
         # Evaluation
         else:
@@ -93,10 +106,25 @@ class Embedding: # Acts as a "replacement" for the C-lookup table
     def parameters(self):
         return [self.weight]
 
-class Flatten: # Used to concatenate the vectors of embeddings of a batch
+class FlattenConsecutive: # Used to concatenate the vectors of embeddings of a batch
+
+    def __init__(self, n):
+        self.n = n # Number of consecutive elements to concatenate in the last dimension
 
     def __call__(self, x):
-        self.out = x.view(x.shape[0], -1)
+
+        # E.g:
+        # e = torch.randn(32, 8, 10) [32 examples, 8 block size, 10 dimensional embedding]
+        # e_test = torch.cat([e[:, ::2, :], e[:, 1::2, :]], dim = 2) is the same as e.view(4, 4, 20) [4 examples, (concatenation of 2 character embeddings)]
+        # (Shape will go from e.g. [32, 8, 10] to [32, 4, 20] [32, 2, 40], [32, 80] (The squeeze removes the 1st dimension))
+
+        B, T, C = x.shape
+        x = x.view(B, T // self.n, C * self.n)
+
+        if x.shape[1] == 1:
+            x = x.squeeze(1) # Remove dimension "1"
+        self.out = x
+
         return self.out
 
     def parameters(self):
@@ -158,7 +186,7 @@ random.shuffle(words)
 n1 = int(0.8 * len(words))
 n2 = int(0.9 * len(words))
 
-block_size = 3
+block_size = 8
 
 Xtr, Ytr = build_dataset(words[0:n1], block_size = block_size) 
 Xdev, Ydev = build_dataset(words[n1:n2], block_size = block_size)
@@ -171,8 +199,8 @@ print(f"Test: X: {Xte.shape} Y: {Yte.shape}")
 torch.manual_seed(42) # Seed rng for reproducibility
 
 # Initialising the model
-n_dimensions = 10 # Number of columns for each character embedding vector
-n_hidden = 200 # In the hidden layer
+n_dimensions = 24 # Number of columns for each character embedding vector
+n_hidden = 128 # In the hidden layer
 mini_batch_size = 32 # Batch size
 
 model = Sequential(
@@ -180,11 +208,20 @@ model = Sequential(
                     
                     # Each batch will go through the C lookup table to find the embedding (Shape will be [mini_batch_size, block_size, n_dimensions])
                     Embedding(num_embeddings = 27, embedding_dimension = n_dimensions),
-                    # Concatenation of vectors (Shape will become [mini_batch_size, block_size * n_dimensions])
-                    Flatten(),
 
-                    Linear(fan_in = (n_dimensions * block_size), fan_out = n_hidden, bias = False), 
+                    # Concatenation of vectors (Shape will go from e.g. [32, 8, 10] to [32, 4, 20] [32, 2, 40], [32, 80] (The squeeze removes the 1st dimension))
+                    FlattenConsecutive(n = 2),
+                    Linear(fan_in = (n_dimensions * 2), fan_out = n_hidden, bias = False), # Linear layer will matrix multiply so [32, 4, 20] @ [20, n_hidden] --> [32, 4, n_hidden]
                     BatchNorm1d(dim = n_hidden),
+
+                    FlattenConsecutive(n = 2),
+                    Linear(fan_in = (n_hidden * 2), fan_out = n_hidden, bias = False), 
+                    BatchNorm1d(dim = n_hidden),
+
+                    FlattenConsecutive(n = 2),
+                    Linear(fan_in = (n_hidden * 2), fan_out = n_hidden, bias = False), 
+                    BatchNorm1d(dim = n_hidden),
+
                     Tanh(),
 
                     Linear(fan_in = n_hidden, fan_out = 27),
@@ -245,6 +282,10 @@ for i in range(steps):
     # Track stats
 
     losses_i.append(loss.log10().item())
+
+# # Shapes of the outputs of all layers
+# for layer in model.layers:
+#     print(layer.__class__.__name__, ":", tuple(layer.out.shape))
 
 if steps >= 1000:
     print(f"Training loss: {loss.item()}")
