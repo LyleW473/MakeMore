@@ -111,16 +111,26 @@ class BigramLanguageModel(nn.Module):
         # Create embedding table of shape (vocab_size, n_embedding_dimensions)
         self.token_embedding_table = nn.Embedding(vocab_size, n_embedding_dimensions)
 
+        self.position_embedding_table = nn.Embedding(block_size, n_embedding_dimensions)
+
         # Linear layer used to convert the token embeddings to logits
         self.language_modeling_head = nn.Linear(n_embedding_dimensions, vocab_size)
 
     def forward(self, idx, targets = None):
         
-        # idx and targets are both (B, T) tensor of integers
+        B, T = idx.shape
+        
+        # idx and targets are both (B, T) tensor of integers (Encodes idx with the token embeddings)
         token_embeddings = self.token_embedding_table(idx) # (B, T, C) [Batch, Time, Channels] (C = n_embedding_dimensions)
 
+        # Positional encoding (Encodes idx with the position of the token)
+        # Note: Need to positionally encode tokens because attention has no notion of space as it acts over a set of vectors
+        # Integers from 0 to T - 1
+        positional_embeddings = self.position_embedding_table(torch.arange(T, device = device)) # (T, C) (C = n_embedding_dimensions)
+        x = token_embeddings + positional_embeddings # (B, T, C)
+
         # Convert token embeddings to logits
-        logits = self.language_modeling_head(token_embeddings) # (B, T, vocab_size)
+        logits = self.language_modeling_head(x) # (B, T, vocab_size)
         
         # Find loss:
         if targets == None:
@@ -164,8 +174,8 @@ output, loss = model(idx = Xb, targets = Yb)
 print(output.shape)
 
 # Test model
-context_text = torch.zeros((1, 1), dtype = torch.long, device = device) # First param = batch size, Second parameter = current time step
-print("".join(decode(model.generate(context_text, max_new_tokens = 100)[0].tolist()))) # [0] to pluck out the single batch dimension, tolist() to convert from Tensor to Python list
+# context_text = torch.zeros((1, 1), dtype = torch.long, device = device) # First param = batch size, Second parameter = current time step
+# print("".join(decode(model.generate(context_text, max_new_tokens = 100)[0].tolist()))) # [0] to pluck out the single batch dimension, tolist() to convert from Tensor to Python list
 
 # PyTorch optimiser
 optimiser = torch.optim.AdamW(model.parameters(), lr = learning_rate)
@@ -188,5 +198,5 @@ for i in range(steps):
     loss.backward()
     optimiser.step()
 
-context_text = torch.zeros((1, 1), dtype = torch.long, device = device) # First param = batch size, Second parameter = current time step
-print("".join(decode(model.generate(context_text, max_new_tokens = 100)[0].tolist())))
+# context_text = torch.zeros((1, 1), dtype = torch.long, device = device) # First param = batch size, Second parameter = current time step
+# print("".join(decode(model.generate(context_text, max_new_tokens = 100)[0].tolist())))
