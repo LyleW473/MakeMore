@@ -3,15 +3,19 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 # Hyper parameters:
-batch_size = 32 # Number of independent sequences to process in parallel
-block_size = 8 # Context length for predictions
+batch_size = 64 # Number of independent sequences to process in parallel
+block_size = 256 # Context length for predictions
 steps = 5000
-learning_rate = 1e-3 # 1e-3 is the typical setting for the learning rate when using the Adam optimiser
+learning_rate = 3e-4 # Reduced learning rate because the model is now deeper
 device = "cuda" if torch.cuda.is_available() else "cpu" # Runs on the GPU rather than CPU if available
 
-eval_interval = 200 # The interval to start evaluating the average loss
-eval_iterations = 300 # Number of iterations for evaluating the average loss
-n_embedding_dimensions = 32 # Dimensionality of each embedding
+eval_interval = 500 # The interval to start evaluating the average loss
+eval_iterations = 200 # Number of iterations for evaluating the average loss
+
+n_embedding_dimensions = 384 # Dimensionality of each embedding
+n_heads = 6 # Number of self-attention heads
+n_layers = 6
+dropout = 0.2 # Dropout probability (20%)
 
 # Load data
 with open("data.txt", "r", encoding = "utf-8") as data_file:
@@ -112,6 +116,8 @@ class Head(nn.Module):
         self.value = nn.Linear(n_embedding_dimensions, head_size, bias = False) # Information from tokens that can be aggregated
         self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size))) # Tril for encoder
 
+        self.dropout = nn.Dropout(p = dropout) # Dropout to randomly stop some tokens from communicating to prevent overfitting
+
     def forward(self, x):
         B, T, C = x.shape # C = head_size
 
@@ -122,6 +128,7 @@ class Head(nn.Module):
         weights = q @ k.transpose(-2, -1) * (C ** - 0.5) # (B, T, C) @ (B, C, T) --> (B, T, T)
         weights = weights.masked_fill(self.tril[:T, :T] == 0, float("-inf")) # (B, T, T)
         weights = F.softmax(weights, dim = -1)
+        weights = self.dropout(weights)
 
         # Perform weighted aggregation of the values
         v = self.value(x)
@@ -139,6 +146,7 @@ class MultiHeadAttention(nn.Module):
 
         self.heads = nn.ModuleList([Head(head_size = head_size) for _ in range(num_heads)])
         self.projection = nn.Linear(n_embedding_dimensions, n_embedding_dimensions)
+        self.dropout = nn.Dropout(p = dropout)
 
     def forward(self, x):
         out = torch.cat([head(x) for head in self.heads], dim = -1) # -1 = channel dimension (C)
@@ -159,7 +167,8 @@ class FeedForward(nn.Module):
         self.net = nn.Sequential(
                                 nn.Linear(n_embedding_dimensions, 4 * n_embedding_dimensions),
                                 nn.ReLU(),
-                                nn.Linear(4 * n_embedding_dimensions, n_embedding_dimensions) # Projection back into the residual pathway
+                                nn.Linear(4 * n_embedding_dimensions, n_embedding_dimensions), # Projection back into the residual pathway
+                                nn.Dropout(p = dropout)
                                 )
     def forward(self, x):
         return self.net(x)
@@ -197,12 +206,10 @@ class BigramLanguageModel(nn.Module):
         self.position_embedding_table = nn.Embedding(block_size, n_embedding_dimensions)
 
         # Blocks of self attention (multi-head attention + feedforward)
-        self.blocks = nn.Sequential(
-                                    Block(n_embedding_dimensions = n_embedding_dimensions, num_heads = 4),
-                                    Block(n_embedding_dimensions = n_embedding_dimensions, num_heads = 4),
-                                    Block(n_embedding_dimensions = n_embedding_dimensions, num_heads = 4),
-                                    nn.LayerNorm(n_embedding_dimensions) # Layer normalisation layer after transformer, before linear layer below
-                                    )
+        self.blocks = nn.Sequential(*[Block(n_embedding_dimensions = n_embedding_dimensions, num_heads = n_heads) for _ in range(n_layers)])
+
+        # Layer normalisation layer after transformer, before the linear layer below
+        self.layer_normalisation_final = nn.LayerNorm(n_embedding_dimensions) 
 
         # Linear layer used to convert the token embeddings to logits
         self.language_modeling_head = nn.Linear(n_embedding_dimensions, vocab_size)
@@ -222,6 +229,9 @@ class BigramLanguageModel(nn.Module):
 
         # Apply self_attention to all heads + feedforward
         x = self.blocks(x) # (B, T, C)
+        
+        # Final layer normalisation layer
+        x = self.layer_normalisation_final(x)
 
         # Convert token embeddings to logits
         logits = self.language_modeling_head(x) # (B, T, vocab_size)
@@ -284,7 +294,7 @@ optimiser = torch.optim.AdamW(model.parameters(), lr = learning_rate)
 for i in range(steps):
 
     # Evaluate loss on the train and validation splits every once in a while
-    if i % eval_iterations == 0:
+    if i % eval_interval == 0:
         losses = estimate_loss()
         print(f"Step: {i} | Training loss: {losses['Train']:.4f} | Validation loss: {losses['Val']:.4f}")
 
