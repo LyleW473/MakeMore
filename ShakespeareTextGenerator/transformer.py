@@ -141,6 +141,23 @@ class MultiHeadAttention(nn.Module):
 
     def forward(self, x):
         return torch.cat([head(x) for head in self.heads], dim = -1) # -1 = channel dimension (C)
+    
+class FeedForward(nn.Module):
+
+    """
+    - FeedForward is an MLP
+    - A simple linear layer followed by a non-linearity 
+    """
+
+    def __init__(self, n_embedding_dimensions):
+        super().__init__()
+        self.net = nn.Sequential(
+                                nn.Linear(n_embedding_dimensions, n_embedding_dimensions),
+                                nn.ReLU()
+                                )
+    def forward(self, x):
+        return self.net(x)
+
 
 # Bigram model
 class BigramLanguageModel(nn.Module):
@@ -157,6 +174,9 @@ class BigramLanguageModel(nn.Module):
         # Multi-head attention
         # Note: Better than a single attention head as multiple independent channels of communication can mean that the tokens can gather lots of different data
         self.self_attention_heads = MultiHeadAttention(4, n_embedding_dimensions // 4) # i.e. 4 heads of (n_embedding_dimensions // 4)-dimensional self-attention
+
+        # Feed forward
+        self.feed_forward = FeedForward(n_embedding_dimensions = n_embedding_dimensions)
 
         # Linear layer used to convert the token embeddings to logits
         self.language_modeling_head = nn.Linear(n_embedding_dimensions, vocab_size)
@@ -176,6 +196,10 @@ class BigramLanguageModel(nn.Module):
 
         # Apply self_attention to all heads
         x = self.self_attention_heads(x) # (B, T, C)
+
+        # Feed forward 
+        # - Allows each independent token to "think" on the information aggregated after the self-attention heads
+        x = self.feed_forward(x) # (B, T, C)
 
         # Convert token embeddings to logits
         logits = self.language_modeling_head(x) # (B, T, vocab_size)
