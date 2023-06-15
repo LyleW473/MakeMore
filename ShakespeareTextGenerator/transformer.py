@@ -138,9 +138,12 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
 
         self.heads = nn.ModuleList([Head(head_size = head_size) for _ in range(num_heads)])
+        self.projection = nn.Linear(n_embedding_dimensions, n_embedding_dimensions)
 
     def forward(self, x):
-        return torch.cat([head(x) for head in self.heads], dim = -1) # -1 = channel dimension (C)
+        out = torch.cat([head(x) for head in self.heads], dim = -1) # -1 = channel dimension (C)
+        out = self.projection(out) # Apply projection for result (linear tranformation of the out) [Projection back into the residual pathway]
+        return out
     
 class FeedForward(nn.Module):
 
@@ -151,13 +154,31 @@ class FeedForward(nn.Module):
 
     def __init__(self, n_embedding_dimensions):
         super().__init__()
+        # Note: Multiply by 4 as from the "Attention is all you need" paper in the FeedForward section:
+        # - It states that the dimensionality of the input and output is 512, and the inner layer has dimensionality of 2048 (so a multiplier of 4)
         self.net = nn.Sequential(
-                                nn.Linear(n_embedding_dimensions, n_embedding_dimensions),
-                                nn.ReLU()
+                                nn.Linear(n_embedding_dimensions, 4 * n_embedding_dimensions),
+                                nn.ReLU(),
+                                nn.Linear(4 * n_embedding_dimensions, n_embedding_dimensions) # Projection back into the residual pathway
                                 )
     def forward(self, x):
         return self.net(x)
 
+class Block(nn.Module):
+    """ Transformer block: communication followed by computation """
+    
+    def __init__(self, n_embedding_dimensions, num_heads):
+        super().__init__()
+
+        head_size = n_embedding_dimensions // num_heads # Each self-attention head will have (n_embedding_dimensions // num_heads)-Dimensional self attention
+        self.self_attention = MultiHeadAttention(num_heads, head_size)
+        self.feed_forward = FeedForward(n_embedding_dimensions = n_embedding_dimensions)
+
+    def forward(self, x):
+        # Note: "x + " are residual connections
+        x = x + self.self_attention(x) # Communication
+        x = x + self.feed_forward(x) # Computation
+        return x
 
 # Bigram model
 class BigramLanguageModel(nn.Module):
@@ -171,12 +192,12 @@ class BigramLanguageModel(nn.Module):
         # Positional encoding embedding table
         self.position_embedding_table = nn.Embedding(block_size, n_embedding_dimensions)
 
-        # Multi-head attention
-        # Note: Better than a single attention head as multiple independent channels of communication can mean that the tokens can gather lots of different data
-        self.self_attention_heads = MultiHeadAttention(4, n_embedding_dimensions // 4) # i.e. 4 heads of (n_embedding_dimensions // 4)-dimensional self-attention
-
-        # Feed forward
-        self.feed_forward = FeedForward(n_embedding_dimensions = n_embedding_dimensions)
+        # Blocks of self attention (multi-head attention + feedforward)
+        self.blocks = nn.Sequential(
+                                    Block(n_embedding_dimensions = n_embedding_dimensions, num_heads = 4),
+                                    Block(n_embedding_dimensions = n_embedding_dimensions, num_heads = 4),
+                                    Block(n_embedding_dimensions = n_embedding_dimensions, num_heads = 4)
+                                    )
 
         # Linear layer used to convert the token embeddings to logits
         self.language_modeling_head = nn.Linear(n_embedding_dimensions, vocab_size)
@@ -194,12 +215,8 @@ class BigramLanguageModel(nn.Module):
         positional_embeddings = self.position_embedding_table(torch.arange(T, device = device)) # (T, C) (C = n_embedding_dimensions)
         x = token_embeddings + positional_embeddings # (B, T, C)
 
-        # Apply self_attention to all heads
-        x = self.self_attention_heads(x) # (B, T, C)
-
-        # Feed forward 
-        # - Allows each independent token to "think" on the information aggregated after the self-attention heads
-        x = self.feed_forward(x) # (B, T, C)
+        # Apply self_attention to all heads + feedforward
+        x = self.blocks(x) # (B, T, C)
 
         # Convert token embeddings to logits
         logits = self.language_modeling_head(x) # (B, T, vocab_size)
