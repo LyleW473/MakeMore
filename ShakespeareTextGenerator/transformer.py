@@ -173,11 +173,15 @@ class Block(nn.Module):
         head_size = n_embedding_dimensions // num_heads # Each self-attention head will have (n_embedding_dimensions // num_heads)-Dimensional self attention
         self.self_attention = MultiHeadAttention(num_heads, head_size)
         self.feed_forward = FeedForward(n_embedding_dimensions = n_embedding_dimensions)
+        self.layer_norm_1 = nn.LayerNorm(n_embedding_dimensions)
+        self.layer_norm_2 = nn.LayerNorm(n_embedding_dimensions)
 
     def forward(self, x):
-        # Note: "x + " are residual connections
-        x = x + self.self_attention(x) # Communication
-        x = x + self.feed_forward(x) # Computation
+        # Notes:
+        # - "x + " are residual connections
+        # - Layer norm layers were applied after transformation but now it is more common to apply before the transformation (pre-norm formulation)
+        x = x + self.self_attention(self.layer_norm_1(x)) # Communication
+        x = x + self.feed_forward(self.layer_norm_2(x)) # Computation
         return x
 
 # Bigram model
@@ -196,7 +200,8 @@ class BigramLanguageModel(nn.Module):
         self.blocks = nn.Sequential(
                                     Block(n_embedding_dimensions = n_embedding_dimensions, num_heads = 4),
                                     Block(n_embedding_dimensions = n_embedding_dimensions, num_heads = 4),
-                                    Block(n_embedding_dimensions = n_embedding_dimensions, num_heads = 4)
+                                    Block(n_embedding_dimensions = n_embedding_dimensions, num_heads = 4),
+                                    nn.LayerNorm(n_embedding_dimensions) # Layer normalisation layer after transformer, before linear layer below
                                     )
 
         # Linear layer used to convert the token embeddings to logits
