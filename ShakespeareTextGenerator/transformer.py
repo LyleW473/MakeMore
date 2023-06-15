@@ -1,3 +1,5 @@
+# A decoder-only transformer that generates Shakespeare-like text (Follows the "Attention Is All You Need" paper)
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
