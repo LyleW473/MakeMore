@@ -5,7 +5,7 @@ from torch.nn import functional as F
 # Hyper parameters:
 batch_size = 32 # Number of independent sequences to process in parallel
 block_size = 8 # Context length for predictions
-steps = 10000
+steps = 5000
 learning_rate = 1e-3 # 1e-3 is the typical setting for the learning rate when using the Adam optimiser
 device = "cuda" if torch.cuda.is_available() else "cpu" # Runs on the GPU rather than CPU if available
 
@@ -101,8 +101,37 @@ def estimate_loss(): # Estimates the average loss over a number of batches for b
 
     return out
 
-# Bigram model:
 
+# Self attention Head
+class Head(nn.Module):
+
+    """ Single head of self attention """
+    def __init__(self, head_size):
+        super().__init__()
+        
+        self.key = nn.Linear(n_embedding_dimensions, head_size, bias = False) # What this token contains
+        self.query = nn.Linear(n_embedding_dimensions, head_size, bias = False) # What this token is looking for
+        self.value = nn.Linear(n_embedding_dimensions, head_size, bias = False) # Information from tokens that can be aggregated
+        self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size))) # Tril for encoder
+
+    def forward(self, x):
+        B, T, C = x.shape # C = head_size
+
+        k = self.key(x) # (B, T, C)
+        q = self.query(x) # (B, T, C)
+
+        # Compute attention scores ("affinities" across tokens)
+        weights = q @ k.transpose(-2, -1) * (C ** - 0.5) # (B, T, C) @ (B, C, T) --> (B, T, T)
+        weights = weights.masked_fill(self.tril[:T, :T] == 0, float("-inf")) # (B, T, T)
+        weights = F.softmax(weights, dim = -1)
+
+        # Perform weighted aggregation of the values
+        v = self.value(x)
+        out = weights @ v # (B, T, T) @ (B, T, C) ---> (B, T, C)
+        return out
+
+
+# Bigram model
 class BigramLanguageModel(nn.Module):
 
     def __init__(self):
@@ -111,7 +140,11 @@ class BigramLanguageModel(nn.Module):
         # Create embedding table of shape (vocab_size, n_embedding_dimensions)
         self.token_embedding_table = nn.Embedding(vocab_size, n_embedding_dimensions)
 
+        # Positional encoding embedding table
         self.position_embedding_table = nn.Embedding(block_size, n_embedding_dimensions)
+
+        # Single self attention head
+        self.self_attention_head = Head(head_size = n_embedding_dimensions)
 
         # Linear layer used to convert the token embeddings to logits
         self.language_modeling_head = nn.Linear(n_embedding_dimensions, vocab_size)
@@ -128,6 +161,9 @@ class BigramLanguageModel(nn.Module):
         # Integers from 0 to T - 1
         positional_embeddings = self.position_embedding_table(torch.arange(T, device = device)) # (T, C) (C = n_embedding_dimensions)
         x = token_embeddings + positional_embeddings # (B, T, C)
+
+        # Apply one head of self attention
+        x = self.self_attention_head(x) # (B, T, C)
 
         # Convert token embeddings to logits
         logits = self.language_modeling_head(x) # (B, T, vocab_size)
@@ -148,10 +184,17 @@ class BigramLanguageModel(nn.Module):
     
     def generate(self, idx, max_new_tokens):
 
-        # idx is (B, T) array of indices in the current context [Batch size, Time step]
+        # idx is (B, T) array of indices in the current context [Batch size, Time step] (at initialisation)
+       
         for _ in range(max_new_tokens):
+            
+            # Crop idx after adding positional encoding
+            # If idx is more than block size, the positional embedding table will run out of scope (as it only has embeddings up to block size)
+            # idx[:, -block_size:] = Only gets predictions from the last 8 characters in idx 
+            idx_cropped = idx[:, -block_size:]
+
             # Get predictions
-            logits, _ = self(idx)
+            logits, _ = self(idx_cropped)
             
             # Focus only on the last time step
             logits = logits[:, -1, :] # From (B, T, C) --> (B, C)
@@ -198,5 +241,5 @@ for i in range(steps):
     loss.backward()
     optimiser.step()
 
-# context_text = torch.zeros((1, 1), dtype = torch.long, device = device) # First param = batch size, Second parameter = current time step
-# print("".join(decode(model.generate(context_text, max_new_tokens = 100)[0].tolist())))
+context_text = torch.zeros((1, 1), dtype = torch.long, device = device) # First param = batch size, Second parameter = current time step
+print("".join(decode(model.generate(context_text, max_new_tokens = 100)[0].tolist())))
