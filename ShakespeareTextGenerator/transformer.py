@@ -101,8 +101,6 @@ def estimate_loss(): # Estimates the average loss over a number of batches for b
 
     return out
 
-
-# Self attention Head
 class Head(nn.Module):
 
     """ Single head of self attention """
@@ -130,6 +128,19 @@ class Head(nn.Module):
         out = weights @ v # (B, T, T) @ (B, T, C) ---> (B, T, C)
         return out
 
+class MultiHeadAttention(nn.Module):
+    """ Multiple heads of self-attention in parallel 
+
+    - Multi-head attention applies multiple attentions in parallel and concatenates the results
+
+    """
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+
+        self.heads = nn.ModuleList([Head(head_size = head_size) for _ in range(num_heads)])
+
+    def forward(self, x):
+        return torch.cat([head(x) for head in self.heads], dim = -1) # -1 = channel dimension (C)
 
 # Bigram model
 class BigramLanguageModel(nn.Module):
@@ -143,8 +154,9 @@ class BigramLanguageModel(nn.Module):
         # Positional encoding embedding table
         self.position_embedding_table = nn.Embedding(block_size, n_embedding_dimensions)
 
-        # Single self attention head
-        self.self_attention_head = Head(head_size = n_embedding_dimensions)
+        # Multi-head attention
+        # Note: Better than a single attention head as multiple independent channels of communication can mean that the tokens can gather lots of different data
+        self.self_attention_heads = MultiHeadAttention(4, n_embedding_dimensions // 4) # i.e. 4 heads of (n_embedding_dimensions // 4)-dimensional self-attention
 
         # Linear layer used to convert the token embeddings to logits
         self.language_modeling_head = nn.Linear(n_embedding_dimensions, vocab_size)
@@ -162,8 +174,8 @@ class BigramLanguageModel(nn.Module):
         positional_embeddings = self.position_embedding_table(torch.arange(T, device = device)) # (T, C) (C = n_embedding_dimensions)
         x = token_embeddings + positional_embeddings # (B, T, C)
 
-        # Apply one head of self attention
-        x = self.self_attention_head(x) # (B, T, C)
+        # Apply self_attention to all heads
+        x = self.self_attention_heads(x) # (B, T, C)
 
         # Convert token embeddings to logits
         logits = self.language_modeling_head(x) # (B, T, vocab_size)
