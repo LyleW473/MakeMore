@@ -61,7 +61,7 @@ random.shuffle(words)
 n1 = int(0.8 * len(words))
 n2 = int(0.9 * len(words))
 
-block_size = 6 # round(sum(len(word) for word in words) / len(words))
+block_size = 3 # round(sum(len(word) for word in words) / len(words))
 
 Xtr, Ytr = build_dataset(words[0:n1], block_size = block_size) # 80% training split
 Xdev, Ydev = build_dataset(words[n1:n2], block_size = block_size) # 10% dev / validation split
@@ -73,10 +73,10 @@ print(f"Test: X: {Xte.shape} Y: {Yte.shape}")
 
 g = torch.Generator().manual_seed(2147483647)
 
-# 27 possible characters (a - z + .)
 # C = embedding look-up table 
-n_dimensions = 10
-C = torch.randn((27, n_dimensions), generator = g) # Each of the 27 characters will have a n-D embedding
+n_dimensions = 10 # Each of the 27 characters will have a embedding with "n_dimensions"
+vocab_size = 27 # 27 possible characters (Letters a - z and the "."" character)
+C = torch.randn((vocab_size, n_dimensions), generator = g)
 
 # Hidden layer (= H) :
 num_neurons = 200
@@ -84,7 +84,7 @@ W1 = torch.randn((block_size * n_dimensions, num_neurons), generator = g) # (blo
 B1 = torch.randn(num_neurons, generator = g) # num_neurons biases
 
 # Output layer:
-W2 = torch.randn((num_neurons, 27), generator = g) # 27 possible outputs
+W2 = torch.randn((num_neurons, vocab_size), generator = g) # 27 possible outputs
 B2 = torch.randn(27, generator = g)
 
 # All parameters
@@ -108,47 +108,67 @@ mini_batch_size = 32
 for i in range(steps):
 
     # Generate mini batch (Stochastic gradient descent for faster convergence to find a local minimum to minimise the loss)
-    mini_b_idxs = torch.randint(0, Xtr.shape[0], (mini_batch_size,)) # Generate indexes between 0 and X.shape[0], 32 indexes inside the list (Chooses 32 examples out of the 228146 examples in the dataset)
+    mini_b_idxs = torch.randint(0, Xtr.shape[0], (mini_batch_size,), generator = g) # Generate indexes between 0 and X.shape[0], 32 indexes inside the list (Chooses 32 examples out of the 228146 examples in the dataset)
 
     # Forward pass:
-    # C[X] = entire data set, C[X[mini_b_idxs]] = training on mini batch
+    # C[X] = entire data set, C[X[mini_b_idxs]] = Training on mini batch
+    # Y[mini_b_idxs] = Training on mini batch, Y = Training on entire dataset (All 228146 examples at once)
 
-    embedding = C[Xtr[mini_b_idxs]] # Shape = torch.Size([32, 3, 2]) Note: First number = number of examples in X (Changes with input size, i.e. words + length of words)
 
-    # Convert [32, 3, 2] -- > [32, 6] for matrix multiplication with weights and biases [Use torch.cat]
-    # All of these 3 have a shape of [32, 2]
+    """  
+    embedding.shape = [batch size, block size, number of dimensions in the embedding for each letter in the sequence]
+    If mini_batch_size = 32, block_size = 3, n_dimensions = 10
 
-    # Method 1:(Creates new memory for concatenation)
-    # torch.cat([embedding[:, 0, :], embedding[:, 1, :], embedding[:, 2, :]], dim = 1) # Concatenate across dimension 1 (the columns)
+    Xtr[mini_b_idxs].shape = [32, 3] (Finds the corresponding embedding vector for each letter in each sequence, for each sequence in the batch)
+    embedding.shape = [32, 3, 10]
+    """
+    embedding = C[Xtr[mini_b_idxs]]
 
-    # Method 2: (Creates new memory for concatenation)
-    # torch.cat(torch.unbind(embedding, 1), dim = 1)) # Same as the code above but if block_size changes from 3, the code above would not work
+    """
+    Convert [32, 3, 10] -- > [32, (3 * 10)] = [32, 30] for matrix multiplication with weights and biases
 
-    # Method 3: (Most efficient)
-    # embedding.view(32, 6) @ W1 + B1
+    Method 1:(Creates new memory for concatenation)
+    torch.cat([embedding[:, 0, :], embedding[:, 1, :], embedding[:, 2, :]], dim = 1) # Concatenate across dimension 1 (the columns)
 
-    H = torch.tanh(embedding.view(embedding.shape[0], n_dimensions * block_size) @ W1 + B1) # Tanh to get numbers between -1 and 1 # H.shape = [num_examples, num_neurons] (num_neurons for each example)
+    Method 2: (Creates new memory for concatenation)
+    - Produces the same results as the code above but if block_size changes from 3, the code above would not work
+    torch.cat(torch.unbind(embedding, 1), dim = 1)) 
 
-    logits = H @ W2 + B2 # Find output in the form of logits
+    Method 3: (Most efficient)
+    embedding.view(32, 6) @ W1 + B1
+    - Tanh is used as the activation function to get numbers between -1 and 1 
+    - H.shape = [batch_size, number of neurons in this hidden layer]
+    If batch_size = 32 and num_neurons = 200, H.shape = [32, 200]
+    """
+    H = torch.tanh(embedding.view(embedding.shape[0], n_dimensions * block_size) @ W1 + B1)
+    
+    # Output layer, find the output in the form of logits (Shape will be the number of neurons in the output layer, in this case being vocab_size)
+    logits = H @ W2 + B2
 
     # Softmax (Classication)
-    # Negative loss likelihood, smaller = better performance
+    """
+    - Negative loss likelihood, smaller values = better performance
     
-    # Method 1:
-    # counts = logits.exp()
-    # prob = counts / counts.sum(1, keepdims = True)
+    Method 1:
+    counts = logits.exp()
+    prob = counts / counts.sum(1, keepdims = True)
 
-    # # prob[torch.arange(32), Y].shape creates a [num_example] tensor that states the probability predicted by the NN for the actual expected next letter for each actual expected next letter in Y
-    # loss = -(prob[torch.arange(32), Y].log().mean()) # The loss
+    - torch.arange(32) creates a tensor of shape [batch_size] from numbers 0 to batch_size
+    - Ytr[mini_b_idxs] is a tensor of shape [batch_size]
+    - prob[torch.arange(32), Ytr[mini_b_idxs]] finds the probability predicted by the NN for each letter coming next for each sequence in the batch (DEMO below)
 
-    # Method 2:
-    # Reasons for usage of cross_entropy:
-    # - Method 1 creates intermediary tensors in memory whereas cross_entropy does not
-    # - Complex expressions are simplified for the backward pass
-    # - Ensures that very positive numbers do not result in a probability of "nan" due to e^num being out of range
-    # Y[mini_b_idxs] = Training on mini batch, Y = Training on entire dataset (All 228146 examples at once)
+    For a single example in a batch:
+    prob[0] = A vector of length 27, containing the probability predicted for each character coming next in the sequence
+    prob[0][y] = y is the ith character in the vector Y. if y = 5 (which would be the character "e"), this would find the probability assigned by the model that "e" will come next in the sequence
+    loss = -(prob[torch.arange(32), Ytr[mini_b_idxs]].log().mean())
+
+    Method 2:
+    Reasons for usage of cross_entropy:
+    - Method 1 creates intermediary tensors in memory whereas cross_entropy does not
+    - Complex expressions are simplified for the backward pass
+    - Ensures that very positive numbers do not result in a probability of "nan" due to e^num being out of range
+    """
     loss = F.cross_entropy(logits, Ytr[mini_b_idxs])
-
 
     # Backpropagation:
 
@@ -206,7 +226,7 @@ def create_samples(num_samples, block_size, embedding_lookup_table):
         context = [0] * block_size # Initialise with special case character "."
 
         while True:
-            embedding = embedding_lookup_table[torch.tensor([context])] # [1, block_size, d]
+            embedding = embedding_lookup_table[torch.tensor([context])] # [1, block_size, n_dimenions]
             hidden = torch.tanh(embedding.view(1, -1) @ W1 + B1) # -1 will find the number of inputs automatically
 
             logits = hidden @ W2 + B2 # Find predictions
