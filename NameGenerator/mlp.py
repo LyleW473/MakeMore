@@ -162,6 +162,17 @@ for i in range(steps):
     prob[0][y] = y is the ith character in the vector Y. if y = 5 (which would be the character "e"), this would find the probability assigned by the model that "e" will come next in the sequence
     loss = -(prob[torch.arange(32), Ytr[mini_b_idxs]].log().mean())
 
+
+    Explanation for how the model learns from its predictions:
+    This means that if the probability assigned by the model to the actual next character in the sequence was:
+    - High = The loss would be lower
+    - Low = The loss would be higher
+    For example, let x = the probability assigned to a single example by the model, where loss = -mean(log(x) + ... + ...)
+    If the probability assigned for a single example was 0.001, log(0.001) = -3, meaning that the loss generated from this example would be bigger
+    Whereas, if the probability assigned for the example was 0.999, log(0.999) = -0.00043451177, generating a smaller loss
+    Therefore, the model is encouraged to assign a higher probability to the actual next expected character in the sequence , via backpropagation, in order to minimise the loss
+
+
     Method 2:
     Reasons for usage of cross_entropy:
     - Method 1 creates intermediary tensors in memory whereas cross_entropy does not
